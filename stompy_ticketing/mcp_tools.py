@@ -69,7 +69,14 @@ def _decorate_display_ids(obj: Any, prefix) -> Any:
 
 
 def _safe_json(data: Any) -> str:
-    """Serialize data as TOON for token-efficient MCP responses."""
+    """Serialize data as TOON for token-efficient MCP responses.
+
+    When the request-scoped ``_display_prefix`` contextvar is set (each tool
+    sets it after project resolution and resets it in ``finally``),
+    ticket-shaped dicts gain ``display_id``. Outside a tool call the var is
+    unset and output is undecorated — display_id is a presentation concern
+    of the MCP layer, not part of the service-level ticket contract.
+    """
     try:
         if hasattr(data, "model_dump"):
             data = data.model_dump()
@@ -168,10 +175,7 @@ def register_ticketing_tools(
 
         Initial statuses: task→backlog, bug→triage, feature→proposed, decision→open.
         Terminal: task→done/cancelled, bug→resolved/wont_fix, feature→shipped/rejected, decision→decided/deferred."""
-        project_check = check_project_func(project)
-        if project_check:
-            return project_check
-
+        _prefix_token = None
         try:
             # Dual-format ref coercion (design 2026-07-27): a prefixed id
             # resolves its own project and OVERRIDES the project param —
@@ -207,6 +211,13 @@ def register_ticketing_tools(
                     ticket_ids = ",".join(str(i) for _, i in _coerced)
             except TicketRefError as e:
                 return json.dumps({"error": str(e)})
+
+            # Validation AFTER coercion: a prefixed ref may have just
+            # supplied the project (review finding #5 — checking first
+            # refused the headline BUG-188-with-no-project flow).
+            project_check = check_project_func(project)
+            if project_check:
+                return project_check
 
             project_name = get_project_func(project)
             _prefix_token = _display_prefix.set(
@@ -401,10 +412,8 @@ def register_ticketing_tools(
                 {"error": f"Ticket operation failed: {str(e)[:200]}", "error_type": e.__class__.__name__}
             )
         finally:
-            try:
+            if _prefix_token is not None:
                 _display_prefix.reset(_prefix_token)
-            except (NameError, ValueError, LookupError):
-                pass  # token never set (early return before project resolution)
 
     @mcp_instance.tool()
     async def ticket_link(
@@ -437,6 +446,7 @@ def register_ticketing_tools(
           add    → ticket_id + target_id or context_label
           remove → link_id
           list   → ticket_id (returns all links)"""
+        _lk_prefix_token = None
         try:
             _src_project, ticket_id = coerce_ticket_ref(ticket_id, project, resolve_prefix_func)
             _tgt_project, target_id = coerce_ticket_ref(target_id, project, resolve_prefix_func)
@@ -545,10 +555,8 @@ def register_ticketing_tools(
                 {"error": f"Link operation failed: {str(e)[:200]}", "error_type": e.__class__.__name__}
             )
         finally:
-            try:
+            if _lk_prefix_token is not None:
                 _display_prefix.reset(_lk_prefix_token)
-            except (NameError, ValueError, LookupError):
-                pass
 
     @mcp_instance.tool()
     async def ticket_board(
@@ -571,6 +579,7 @@ def register_ticketing_tools(
         if project_check:
             return project_check
 
+        _bd_tok = None
         try:
             project_name = get_project_func(project)
             _bd_tok = _display_prefix.set(get_prefix_func(project_name) if get_prefix_func else None)
@@ -605,10 +614,8 @@ def register_ticketing_tools(
                 {"error": f"Board view failed: {str(e)[:200]}", "error_type": e.__class__.__name__}
             )
         finally:
-            try:
+            if _bd_tok is not None:
                 _display_prefix.reset(_bd_tok)
-            except (NameError, ValueError, LookupError):
-                pass
 
     @mcp_instance.tool()
     async def ticket_search(
@@ -639,6 +646,7 @@ def register_ticketing_tools(
             except _re.error as exc:
                 return json.dumps({"error": f"Invalid regex pattern: {exc}"})
 
+        _sr_tok = None
         try:
             project_name = get_project_func(project)
             _sr_tok = _display_prefix.set(get_prefix_func(project_name) if get_prefix_func else None)
@@ -665,7 +673,5 @@ def register_ticketing_tools(
                 {"error": f"Search failed: {str(e)[:200]}", "error_type": e.__class__.__name__}
             )
         finally:
-            try:
+            if _sr_tok is not None:
                 _display_prefix.reset(_sr_tok)
-            except (NameError, ValueError, LookupError):
-                pass

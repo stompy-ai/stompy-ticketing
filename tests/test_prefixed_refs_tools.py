@@ -32,7 +32,7 @@ def _make_mock_mcp():
 
 
 def _run(coro):
-    return asyncio.get_event_loop().run_until_complete(coro)
+    return asyncio.run(coro)
 
 
 def _register(resolve_prefix_func=None, get_prefix_func=None):
@@ -98,6 +98,7 @@ class TestPrefixedRefRouting:
             action="batch_close", ticket_ids="BUG-1,STOMPY-2", confirm=True
         ))
         assert "span multiple projects" in json.loads(out)["error"]
+        assert seen["db_projects"] == []  # refused before any DB touch
 
 
 class TestCrossProjectLinkRefusal:
@@ -132,3 +133,64 @@ class TestBackwardCompat:
         tools, seen = _register(resolve_prefix_func=None)
         out = _run(tools["ticket"](action="get", ticket_id="STOMPY-1"))
         assert "not supported by this host" in json.loads(out)["error"]
+
+
+class TestValidationOrdering:
+    """Review finding #5: project validation must run AFTER ref coercion —
+    a host whose check REFUSES project=None (the real host does, post-#501)
+    must still serve ticket(action='get', ticket_id='BUG-188')."""
+
+    def test_prefixed_ref_survives_none_refusing_check(self):
+        mcp = _make_mock_mcp()
+        seen = {"db_projects": [], "checked": []}
+
+        @contextmanager
+        def db_ctx(project=None):
+            seen["db_projects"].append(project)
+            conn = MagicMock()
+            cursor = MagicMock()
+            cursor.fetchone.return_value = None
+            conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
+            conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+            yield conn
+
+        def strict_check(project=None):
+            seen["checked"].append(project)
+            if not project:
+                return json.dumps({"error": "INVALID_PROJECT: project required"})
+            return None
+
+        register_ticketing_tools(
+            mcp_instance=mcp,
+            get_db_func=db_ctx,
+            check_project_func=strict_check,
+            get_project_func=MagicMock(side_effect=lambda p=None: p or "default"),
+            resolve_prefix_func=_resolver,
+        )
+        _run(mcp._registered_tools["ticket"](action="get", ticket_id="BUG-188"))
+        # The check saw the ref-supplied project, not None.
+        assert seen["checked"] == ["bug_inbox"]
+        assert seen["db_projects"] == ["bug_inbox"]
+
+
+class TestDisplayIdDecoration:
+    def test_success_path_response_carries_display_id(self):
+        from unittest.mock import patch
+
+        from stompy_ticketing.models import TicketResponse
+
+        tools, seen = _register(
+            resolve_prefix_func=_resolver,
+            get_prefix_func=lambda project: {"stompy": "STOMPY"}.get(project),
+        )
+        response = TicketResponse(
+            id=42, title="T", description=None, type="task", status="backlog",
+            priority="medium", assignee=None, tags=[], metadata=None,
+            session_id=None, created_at=1700000000.0, updated_at=1700000000.0,
+            closed_at=None,
+        )
+        with patch(
+            "stompy_ticketing.mcp_tools.TicketService.get_ticket", return_value=response
+        ):
+            out = _run(tools["ticket"](action="get", ticket_id=42, project="stompy"))
+        assert "STOMPY-42" in out

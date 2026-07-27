@@ -57,3 +57,31 @@ class TestDisplayId:
 
     def test_without_prefix_falls_back_to_plain(self):
         assert format_display_id(None, 7) == "7"
+
+
+class TestReviewHardening:
+    """Pins the 2026-07-27 Kimi review findings on refs.py."""
+
+    @pytest.mark.parametrize("bad", [True, False, 1311.0, ["BUG-1"], {"id": 1}, b"BUG-1"])
+    def test_non_int_str_garbage_raises_ticket_ref_error(self, bad):
+        with pytest.raises(TicketRefError):
+            coerce_ticket_ref(bad, PROJ, _resolver)
+
+    @pytest.mark.parametrize("out_of_range", [-5, 0, 10**10])
+    def test_int_range_parity_with_string_paths(self, out_of_range):
+        with pytest.raises(TicketRefError, match="out of range"):
+            coerce_ticket_ref(out_of_range, PROJ, _resolver)
+
+    def test_zero_digit_string_rejected(self):
+        with pytest.raises(TicketRefError, match="out of range"):
+            coerce_ticket_ref("0", PROJ, _resolver)
+
+    def test_padded_digit_string_takes_int_path(self):
+        assert coerce_ticket_ref(" 1311 ", PROJ, _resolver) == (PROJ, 1311)
+
+    def test_unicode_digits_rejected(self):
+        with pytest.raises(TicketRefError):
+            coerce_ticket_ref("١٣١١", PROJ, _resolver)  # Arabic-Indic digits
+
+    def test_display_id_upcases_stored_prefix(self):
+        assert format_display_id("stompy", 7) == "STOMPY-7"
