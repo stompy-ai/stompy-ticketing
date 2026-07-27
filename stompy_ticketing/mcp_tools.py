@@ -11,10 +11,13 @@ and helper functions from the host (Stompy), decoupling this plugin from
 Stompy internals.
 """
 
+import contextvars
 import fnmatch
 import json
 import time as _time
-from typing import Annotated, Any, Callable, List, Literal, Optional
+from typing import Annotated, Any, Callable, List, Literal, Optional, Union
+
+from stompy_ticketing.refs import TicketRefError, coerce_ticket_ref, format_display_id
 
 from psycopg2 import OperationalError as _OperationalError
 
@@ -45,13 +48,36 @@ def _toon_encode(data):
         return json.dumps(data, default=str)
 
 
+# Display-id prefix for the CURRENT tool call (request-scoped by contextvar —
+# module globals would race concurrent calls). Set by each tool after project
+# resolution; consumed by _safe_json so every response gains display_id
+# without touching 20 call sites.
+_display_prefix: contextvars.ContextVar = contextvars.ContextVar("_display_prefix", default=None)
+
+
+def _decorate_display_ids(obj: Any, prefix) -> Any:
+    """Recursively add display_id to anything that looks like a ticket dict."""
+    if isinstance(obj, dict):
+        if isinstance(obj.get("id"), int) and "title" in obj and "status" in obj:
+            obj.setdefault("display_id", format_display_id(prefix, obj["id"]))
+        for v in obj.values():
+            _decorate_display_ids(v, prefix)
+    elif isinstance(obj, list):
+        for v in obj:
+            _decorate_display_ids(v, prefix)
+    return obj
+
+
 def _safe_json(data: Any) -> str:
     """Serialize data as TOON for token-efficient MCP responses."""
     try:
         if hasattr(data, "model_dump"):
-            return _toon_encode(data.model_dump())
-        if hasattr(data, "dict"):
-            return _toon_encode(data.dict())
+            data = data.model_dump()
+        elif hasattr(data, "dict"):
+            data = data.dict()
+        _prefix = _display_prefix.get()
+        if _prefix:
+            data = _decorate_display_ids(data, _prefix)
         return _toon_encode(data)
     except Exception as e:
         return json.dumps({"error": str(e)})
@@ -64,6 +90,8 @@ def register_ticketing_tools(
     get_project_func: Callable,
     resolve_schema_func: Optional[Callable] = None,
     notify_resolution_func: Optional[Callable] = None,
+    resolve_prefix_func: Optional[Callable] = None,
+    get_prefix_func: Optional[Callable] = None,
 ) -> None:
     """Register ticketing MCP tools on the given FastMCP instance.
 
@@ -102,8 +130,14 @@ def register_ticketing_tools(
         status: Annotated[Optional[str], "Target status for move/batch_move, or filter for list"] = None,
         assignee: Annotated[Optional[str], "Assignee name"] = None,
         tags: Annotated[Optional[str], "Comma-separated tags"] = None,
-        ticket_id: Annotated[Optional[int], "Ticket ID (get/update/move/close)"] = None,
-        ticket_ids: Annotated[Optional[str], "Comma-separated IDs (batch_move/batch_close)"] = None,
+        ticket_id: Annotated[
+            Optional[Union[int, str]],
+            "Ticket ID (get/update/move/close): numeric (1311) or prefixed (STOMPY-1311)",
+        ] = None,
+        ticket_ids: Annotated[
+            Optional[str],
+            "Comma-separated IDs (batch_move/batch_close); numeric or prefixed, all same project",
+        ] = None,
         confirm: Annotated[bool, "Execute batch operation (default: preview only)"] = False,
         resolution: Annotated[
             Optional[str],
@@ -139,7 +173,45 @@ def register_ticketing_tools(
             return project_check
 
         try:
+            # Dual-format ref coercion (design 2026-07-27): a prefixed id
+            # resolves its own project and OVERRIDES the project param —
+            # unless the caller explicitly passed a DIFFERENT project, which
+            # is a conflict we refuse rather than guess.
+            try:
+                _ref_project, ticket_id = coerce_ticket_ref(ticket_id, project, resolve_prefix_func)
+                if _ref_project != project:
+                    if project is not None:
+                        return json.dumps({
+                            "error": f"Ticket ref belongs to project '{_ref_project}' "
+                            f"but project='{project}' was passed. Drop the project "
+                            "param or use a numeric id."
+                        })
+                    project = _ref_project
+                if ticket_ids:
+                    _parts = [x.strip() for x in str(ticket_ids).split(",") if x.strip()]
+                    _coerced = [coerce_ticket_ref(x, project, resolve_prefix_func) for x in _parts]
+                    _projects = {pr for pr, _ in _coerced if pr is not None} or {project}
+                    if len(_projects) > 1:
+                        return json.dumps({
+                            "error": "Batch refs span multiple projects "
+                            f"({sorted(_projects)}) — batches are per-project."
+                        })
+                    _only = _projects.pop()
+                    if _only != project:
+                        if project is not None:
+                            return json.dumps({
+                                "error": f"Batch refs belong to project '{_only}' "
+                                f"but project='{project}' was passed."
+                            })
+                        project = _only
+                    ticket_ids = ",".join(str(i) for _, i in _coerced)
+            except TicketRefError as e:
+                return json.dumps({"error": str(e)})
+
             project_name = get_project_func(project)
+            _prefix_token = _display_prefix.set(
+                get_prefix_func(project_name) if get_prefix_func else None
+            )
             with get_db_func(project) as conn:
                 schema = _get_schema(project_name)
 
@@ -328,6 +400,11 @@ def register_ticketing_tools(
             return json.dumps(
                 {"error": f"Ticket operation failed: {str(e)[:200]}", "error_type": e.__class__.__name__}
             )
+        finally:
+            try:
+                _display_prefix.reset(_prefix_token)
+            except (NameError, ValueError, LookupError):
+                pass  # token never set (early return before project resolution)
 
     @mcp_instance.tool()
     async def ticket_link(
@@ -335,8 +412,12 @@ def register_ticketing_tools(
             Literal["add", "remove", "list"],
             "Operation to perform",
         ],
-        ticket_id: Annotated[Optional[int], "Source ticket ID (add/list)"] = None,
-        target_id: Annotated[Optional[int], "Target ticket ID for ticket-to-ticket links (add)"] = None,
+        ticket_id: Annotated[
+            Optional[Union[int, str]], "Source ticket ID (add/list): numeric or prefixed"
+        ] = None,
+        target_id: Annotated[
+            Optional[Union[int, str]], "Target ticket ID for ticket-to-ticket links (add): numeric or prefixed (same project)"
+        ] = None,
         link_type: Annotated[
             Optional[Literal["blocks", "parent", "related", "duplicate", "implements", "references", "updates"]],
             "Relationship type (default: related)",
@@ -356,12 +437,38 @@ def register_ticketing_tools(
           add    → ticket_id + target_id or context_label
           remove → link_id
           list   → ticket_id (returns all links)"""
+        try:
+            _src_project, ticket_id = coerce_ticket_ref(ticket_id, project, resolve_prefix_func)
+            _tgt_project, target_id = coerce_ticket_ref(target_id, project, resolve_prefix_func)
+            if _src_project != project:
+                if project is not None:
+                    return json.dumps({
+                        "error": f"Source ref belongs to project '{_src_project}' "
+                        f"but project='{project}' was passed."
+                    })
+                project = _src_project
+            if target_id is not None and _tgt_project != project:
+                # minimal: cross-project links need a target_ref column on
+                # ticket_links (FKs are per-schema). Explicit refusal, not a
+                # silent mangle — revisit with the follow-up ticket.
+                return json.dumps({
+                    "error": f"Cross-project links are not supported yet "
+                    f"(target resolves to '{_tgt_project}', source is "
+                    f"'{project}'). Reference the ticket id in the "
+                    "description for now."
+                })
+        except TicketRefError as e:
+            return json.dumps({"error": str(e)})
+
         project_check = check_project_func(project)
         if project_check:
             return project_check
 
         try:
             project_name = get_project_func(project)
+            _lk_prefix_token = _display_prefix.set(
+                get_prefix_func(project_name) if get_prefix_func else None
+            )
             with get_db_func(project) as conn:
                 schema = _get_schema(project_name)
 
@@ -437,6 +544,11 @@ def register_ticketing_tools(
             return json.dumps(
                 {"error": f"Link operation failed: {str(e)[:200]}", "error_type": e.__class__.__name__}
             )
+        finally:
+            try:
+                _display_prefix.reset(_lk_prefix_token)
+            except (NameError, ValueError, LookupError):
+                pass
 
     @mcp_instance.tool()
     async def ticket_board(
@@ -461,6 +573,7 @@ def register_ticketing_tools(
 
         try:
             project_name = get_project_func(project)
+            _bd_tok = _display_prefix.set(get_prefix_func(project_name) if get_prefix_func else None)
             # One retry on Neon idle-conn drop (SSL connection closed).
             # Context manager is re-entered to obtain a fresh connection.
             last_op_error: Optional[Exception] = None
@@ -491,6 +604,11 @@ def register_ticketing_tools(
             return json.dumps(
                 {"error": f"Board view failed: {str(e)[:200]}", "error_type": e.__class__.__name__}
             )
+        finally:
+            try:
+                _display_prefix.reset(_bd_tok)
+            except (NameError, ValueError, LookupError):
+                pass
 
     @mcp_instance.tool()
     async def ticket_search(
@@ -523,6 +641,7 @@ def register_ticketing_tools(
 
         try:
             project_name = get_project_func(project)
+            _sr_tok = _display_prefix.set(get_prefix_func(project_name) if get_prefix_func else None)
             fetch_limit = limit * 3 if compiled_regex else limit
             with get_db_func(project) as conn:
                 schema = _get_schema(project_name)
@@ -545,3 +664,8 @@ def register_ticketing_tools(
             return json.dumps(
                 {"error": f"Search failed: {str(e)[:200]}", "error_type": e.__class__.__name__}
             )
+        finally:
+            try:
+                _display_prefix.reset(_sr_tok)
+            except (NameError, ValueError, LookupError):
+                pass
