@@ -59,7 +59,7 @@ def _register(mock_svc=None, db_factory=None):
     call_count = {"n": 0}
 
     @contextmanager
-    def db_ctx(project=None):
+    def db_ctx(project=None, require_write=True):
         n = call_count["n"]
         call_count["n"] += 1
         if db_factory is not None:

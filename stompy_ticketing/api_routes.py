@@ -36,7 +36,10 @@ router = APIRouter(prefix="/projects/{name}/tickets", tags=["Tickets"])
 _service = TicketService()
 
 # These will be set by the plugin registration to provide DB access.
-# get_db_func(project) returns a context manager that yields a DB connection.
+# get_db_func(project, require_write=...) returns a context manager that
+# yields a DB connection. require_write=True asks the HOST to enforce its
+# shared-project write-role gate before handing out the connection
+# (STOMPY-1423/1432) — reads pass False, mutations True, ALWAYS explicit.
 _get_db_for_project: Optional[Callable] = None
 _resolve_schema: Optional[Callable] = None
 _on_ticket_write: Optional[Callable] = None
@@ -50,7 +53,10 @@ def configure_routes(
     """Configure the router with database access functions.
 
     Args:
-        get_db_func: Function(project) -> context-manager DB connection.
+        get_db_func: Function(project, require_write=bool) -> context-manager
+            DB connection. require_write=True enforces the host's
+            shared-project write-role gate (STOMPY-1423/1432); every call
+            site in this module passes it explicitly.
         resolve_schema_func: Function(name) -> schema name. If None, uses name directly.
         cache_invalidator_func: Optional function(project) called after ticket
             writes to invalidate REST response caches. No-op if None.
@@ -95,7 +101,7 @@ async def create_ticket(name: str, body: TicketCreate):
     _require_db()
     schema = _get_schema(name)
     try:
-        with _get_db_for_project(name) as conn:
+        with _get_db_for_project(name, require_write=True) as conn:
             result = _service.create_ticket(conn, schema, body)
         _invalidate_ticket_cache(name)
         return result
@@ -118,7 +124,7 @@ async def list_tickets(
     """List tickets with optional filters."""
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=False) as conn:
         filters = TicketListFilters(
             type=type,
             status=ticket_status,
@@ -144,7 +150,7 @@ async def board_view(
     """Get a kanban or summary board view."""
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=False) as conn:
         return _service.board_view(
             conn, schema,
             type_filter=type,
@@ -167,7 +173,7 @@ async def search_tickets(
     """Full-text search tickets."""
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=False) as conn:
         return _service.search_tickets(
             conn, schema, query,
             type_filter=type,
@@ -182,7 +188,7 @@ async def archive_tickets(name: str):
     """Manually trigger archival of stale closed tickets."""
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=True) as conn:
         count = _service.archive_stale_tickets(conn, schema)
     if count > 0:
         _invalidate_ticket_cache(name)
@@ -204,7 +210,7 @@ async def batch_move(name: str, body: BatchMoveRequest):
     """
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=True) as conn:
         result = _service.batch_transition(
             conn, schema, body.ticket_ids, body.status,
             confirm=body.confirm,
@@ -225,7 +231,7 @@ async def batch_close(name: str, body: BatchCloseRequest):
     """
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=True) as conn:
         result = _service.batch_close(
             conn, schema, body.ticket_ids,
             confirm=body.confirm,
@@ -244,7 +250,7 @@ async def list_tags(
     """List all unique tags with usage counts across tickets."""
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=False) as conn:
         tags = _service.list_tags(conn, schema, include_archived=include_archived)
         return {"tags": tags, "total": len(tags)}
 
@@ -254,7 +260,7 @@ async def get_ticket(name: str, ticket_id: int):
     """Get a ticket by ID with history and links."""
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=False) as conn:
         result = _service.get_ticket(conn, schema, ticket_id)
         if not result:
             raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
@@ -266,7 +272,7 @@ async def update_ticket(name: str, ticket_id: int, body: TicketUpdate):
     """Update ticket fields (not status - use /move for that)."""
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=True) as conn:
         result = _service.update_ticket(conn, schema, ticket_id, body)
         if not result:
             raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
@@ -279,7 +285,7 @@ async def transition_ticket(name: str, ticket_id: int, body: TicketTransition):
     """Transition a ticket to a new status via the state machine."""
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=True) as conn:
         try:
             result = _service.transition_ticket(conn, schema, ticket_id, body.status)
             if not result:
@@ -302,7 +308,7 @@ async def add_link(name: str, ticket_id: int, body: TicketLinkCreate):
     """Add a link between two tickets."""
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=True) as conn:
         return _service.add_link(conn, schema, ticket_id, body)
 
 
@@ -311,7 +317,7 @@ async def list_links(name: str, ticket_id: int):
     """List all links for a ticket."""
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=False) as conn:
         return _service.list_links(conn, schema, ticket_id)
 
 
@@ -320,7 +326,7 @@ async def remove_link(name: str, ticket_id: int, link_id: int):
     """Remove a ticket link."""
     _require_db()
     schema = _get_schema(name)
-    with _get_db_for_project(name) as conn:
+    with _get_db_for_project(name, require_write=True) as conn:
         removed = _service.remove_link(conn, schema, link_id)
         if not removed:
             raise HTTPException(status_code=404, detail=f"Link {link_id} not found")

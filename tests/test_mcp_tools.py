@@ -87,7 +87,7 @@ class TestSchemaResolution:
         get_db = MagicMock()
 
         @contextmanager
-        def db_ctx(project=None):
+        def db_ctx(project=None, require_write=True):
             conn = MagicMock()
             cursor = MagicMock()
             conn.cursor.return_value.__enter__ = MagicMock(return_value=cursor)
@@ -134,7 +134,7 @@ class TestSchemaResolution:
             get_project = MagicMock(return_value="onboarding-test-feb21")
 
             @contextmanager
-            def db_ctx(project=None):
+            def db_ctx(project=None, require_write=True):
                 yield MagicMock()
 
             register_ticketing_tools(
@@ -173,7 +173,7 @@ class TestSchemaResolution:
             get_project = MagicMock(return_value="simple_project")
 
             @contextmanager
-            def db_ctx(project=None):
+            def db_ctx(project=None, require_write=True):
                 yield MagicMock()
 
             register_ticketing_tools(
@@ -208,7 +208,7 @@ class TestSchemaResolution:
             get_project = MagicMock(return_value="my-project")
 
             @contextmanager
-            def db_ctx(project=None):
+            def db_ctx(project=None, require_write=True):
                 yield MagicMock()
 
             register_ticketing_tools(
@@ -245,7 +245,7 @@ class TestSchemaResolution:
             get_project = MagicMock(return_value="my-project")
 
             @contextmanager
-            def db_ctx(project=None):
+            def db_ctx(project=None, require_write=True):
                 yield MagicMock()
 
             register_ticketing_tools(
@@ -282,7 +282,7 @@ class TestSchemaResolution:
             get_project = MagicMock(return_value="my-project")
 
             @contextmanager
-            def db_ctx(project=None):
+            def db_ctx(project=None, require_write=True):
                 yield MagicMock()
 
             register_ticketing_tools(
@@ -317,7 +317,7 @@ class TestSchemaResolution:
             get_project = MagicMock(return_value="my-project")
 
             @contextmanager
-            def db_ctx(project=None):
+            def db_ctx(project=None, require_write=True):
                 yield MagicMock()
 
             register_ticketing_tools(
@@ -349,7 +349,7 @@ class TestUpdateActionRejectsStatus:
         get_project = MagicMock(return_value="test-project")
 
         @contextmanager
-        def db_ctx(project=None):
+        def db_ctx(project=None, require_write=True):
             yield MagicMock()
 
         with patch("stompy_ticketing.mcp_tools.TicketService", return_value=mock_svc):
@@ -406,7 +406,7 @@ class TestTicketListPagination:
         get_project = MagicMock(return_value="test-project")
 
         @contextmanager
-        def db_ctx(project=None):
+        def db_ctx(project=None, require_write=True):
             yield MagicMock()
 
         with patch("stompy_ticketing.mcp_tools.TicketService", return_value=mock_svc):
