@@ -90,6 +90,17 @@ def _safe_json(data: Any) -> str:
         return json.dumps({"error": str(e)})
 
 
+# STOMPY-1432: ticket actions that MUTATE state. Acquisitions for these
+# pass require_write=True so the host's shared-project write-role gate
+# (owner/contributor/admin) refuses viewers; everything else is a read.
+# Keep in sync with the Literal annotations on the tools below — the
+# plugin test suite pins the union.
+TICKET_WRITE_ACTIONS = frozenset(
+    {"create", "update", "move", "close", "archive", "batch_move", "batch_close"}
+)
+TICKET_LINK_WRITE_ACTIONS = frozenset({"add", "remove"})
+
+
 def register_ticketing_tools(
     mcp_instance: Any,
     get_db_func: Callable,
@@ -104,7 +115,11 @@ def register_ticketing_tools(
 
     Args:
         mcp_instance: FastMCP server to register tools on.
-        get_db_func: Function(project=None) -> context-manager DB connection.
+        get_db_func: Function(project=None, require_write=bool) ->
+            context-manager DB connection. require_write=True enforces the
+            host's shared-project write-role gate (STOMPY-1423/1432):
+            viewers of a shared project are refused mutating acquisitions.
+            Every call site passes it explicitly, derived from the action.
         check_project_func: Function(project=None) -> error string or None.
         get_project_func: Function(project=None) -> project name string.
         resolve_schema_func: Optional function(name) -> schema name. If None,
@@ -223,7 +238,9 @@ def register_ticketing_tools(
             _prefix_token = _display_prefix.set(
                 get_prefix_func(project_name) if get_prefix_func else None
             )
-            with get_db_func(project) as conn:
+            with get_db_func(
+                project, require_write=action in TICKET_WRITE_ACTIONS
+            ) as conn:
                 schema = _get_schema(project_name)
 
                 if action == "create":
@@ -479,7 +496,9 @@ def register_ticketing_tools(
             _lk_prefix_token = _display_prefix.set(
                 get_prefix_func(project_name) if get_prefix_func else None
             )
-            with get_db_func(project) as conn:
+            with get_db_func(
+                project, require_write=action in TICKET_LINK_WRITE_ACTIONS
+            ) as conn:
                 schema = _get_schema(project_name)
 
                 if action == "add":
@@ -588,7 +607,7 @@ def register_ticketing_tools(
             last_op_error: Optional[Exception] = None
             for attempt in range(2):
                 try:
-                    with get_db_func(project) as conn:
+                    with get_db_func(project, require_write=False) as conn:
                         schema = _get_schema(project_name)
                         result = service.board_view(
                             conn, schema,
@@ -651,7 +670,7 @@ def register_ticketing_tools(
             project_name = get_project_func(project)
             _sr_tok = _display_prefix.set(get_prefix_func(project_name) if get_prefix_func else None)
             fetch_limit = limit * 3 if compiled_regex else limit
-            with get_db_func(project) as conn:
+            with get_db_func(project, require_write=False) as conn:
                 schema = _get_schema(project_name)
                 result = service.search_tickets(
                     conn, schema, query,

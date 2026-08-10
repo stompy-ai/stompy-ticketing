@@ -73,7 +73,7 @@ def _mock_db_context(conn):
 def _create_test_app(conn, cur):
     """Create a FastAPI test app with mock DB."""
 
-    def get_db_func(project=None):
+    def get_db_func(project=None, require_write=True):
         return _mock_db_context(conn)
 
     configure_routes(get_db_func=get_db_func)

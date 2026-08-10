@@ -40,7 +40,7 @@ def _register(resolve_prefix_func=None, get_prefix_func=None):
     seen = {"db_projects": []}
 
     @contextmanager
-    def db_ctx(project=None):
+    def db_ctx(project=None, require_write=True):
         seen["db_projects"].append(project)
         conn = MagicMock()
         cursor = MagicMock()
@@ -118,7 +118,7 @@ class TestBackwardCompat:
         mcp = _make_mock_mcp()
 
         @contextmanager
-        def db_ctx(project=None):
+        def db_ctx(project=None, require_write=True):
             yield MagicMock()
 
         register_ticketing_tools(
@@ -145,7 +145,7 @@ class TestValidationOrdering:
         seen = {"db_projects": [], "checked": []}
 
         @contextmanager
-        def db_ctx(project=None):
+        def db_ctx(project=None, require_write=True):
             seen["db_projects"].append(project)
             conn = MagicMock()
             cursor = MagicMock()
