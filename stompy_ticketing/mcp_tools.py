@@ -90,15 +90,22 @@ def _safe_json(data: Any) -> str:
         return json.dumps({"error": str(e)})
 
 
-# STOMPY-1432: ticket actions that MUTATE state. Acquisitions for these
-# pass require_write=True so the host's shared-project write-role gate
-# (owner/contributor/admin) refuses viewers; everything else is a read.
-# Keep in sync with the Literal annotations on the tools below — the
-# plugin test suite pins the union.
+# STOMPY-1432: action classification driving the host's shared-project
+# write-role gate (owner/contributor/admin refuses viewers).
+#
+# BOTH sets are declared, and the acquisitions below test membership of the
+# READ set — so an action that is in NEITHER (a new one someone forgot to
+# classify) acquires as a WRITE and is refused for viewers, rather than
+# silently taking the read path and re-opening the hole this fixes. Kimi's
+# review of #24 caught the original `action in WRITE` spelling, which failed
+# OPEN on exactly that omission. The test suite pins both totality
+# (READ | WRITE covers each tool's Literal) and disjointness.
 TICKET_WRITE_ACTIONS = frozenset(
     {"create", "update", "move", "close", "archive", "batch_move", "batch_close"}
 )
+TICKET_READ_ACTIONS = frozenset({"get", "list", "list_tags"})
 TICKET_LINK_WRITE_ACTIONS = frozenset({"add", "remove"})
+TICKET_LINK_READ_ACTIONS = frozenset({"list"})
 
 
 def register_ticketing_tools(
@@ -239,7 +246,7 @@ def register_ticketing_tools(
                 get_prefix_func(project_name) if get_prefix_func else None
             )
             with get_db_func(
-                project, require_write=action in TICKET_WRITE_ACTIONS
+                project, require_write=action not in TICKET_READ_ACTIONS
             ) as conn:
                 schema = _get_schema(project_name)
 
@@ -497,7 +504,7 @@ def register_ticketing_tools(
                 get_prefix_func(project_name) if get_prefix_func else None
             )
             with get_db_func(
-                project, require_write=action in TICKET_LINK_WRITE_ACTIONS
+                project, require_write=action not in TICKET_LINK_READ_ACTIONS
             ) as conn:
                 schema = _get_schema(project_name)
 
