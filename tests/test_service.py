@@ -697,7 +697,10 @@ class TestBoardView:
         assert "backlog" in status_names
         assert "in_progress" in status_names
 
-    def test_kanban_view_truncates_long_descriptions(self):
+    def test_kanban_view_previews_long_descriptions_without_cutting_them(self):
+        """CONTRACT CHANGED (STOMPY-1519): the card excerpt moved to its own
+        field. Truncating `description` in place meant the web detail dialog,
+        which reuses the board row, rendered a cut string."""
         long_desc = "A" * 500
         rows = [
             _make_ticket_row(id=1, status="backlog", description=long_desc),
@@ -708,8 +711,9 @@ class TestBoardView:
         result = self.service.board_view(conn, SCHEMA, view="kanban", limit=0)
 
         ticket = result.columns[0].tickets[0]
-        assert len(ticket.description) == 103  # 100 chars + "..."
-        assert ticket.description.endswith("...")
+        assert ticket.description == long_desc  # whole, always
+        assert len(ticket.description_preview) == 103  # 100 chars + "..."
+        assert ticket.description_preview.endswith("...")
 
     def test_kanban_view_preserves_short_descriptions(self):
         short_desc = "Fix the login bug"
@@ -767,10 +771,12 @@ class TestBoardView:
 
         result = self.service.board_view(conn, SCHEMA, view="detail", limit=0)
 
-        # detail is not "summary", so it uses kanban path with truncation
+        # detail is not "summary", so it uses the kanban path — which now
+        # carries the full description plus a card preview (STOMPY-1519).
         assert result.total == 1
         ticket = result.columns[0].tickets[0]
-        assert len(ticket.description) == 103
+        assert ticket.description == "A" * 500
+        assert len(ticket.description_preview) == 103
 
 
 # --------------------------------------------------------------------------- #

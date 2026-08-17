@@ -135,6 +135,11 @@ class TicketResponse(BaseModel):
     id: int
     title: str
     description: Optional[str] = None
+    #: Card-sized excerpt of `description`, set only on BOARD responses.
+    #: The board used to truncate `description` itself, so the web detail
+    #: dialog — which reuses the board row — rendered a cut string
+    #: (STOMPY-1519). A display value must not wear a data name.
+    description_preview: Optional[str] = None
     type: str
     status: str
     priority: str
