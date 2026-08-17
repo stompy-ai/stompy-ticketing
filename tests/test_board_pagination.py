@@ -239,15 +239,16 @@ class TestBoardCompactView:
         assert result.view == "compact"
 
 
-class TestBoardDescriptionTruncation:
-    """Description truncation reduced from 200 to 100 chars."""
+class TestBoardDescriptionPreview:
+    """Card excerpts are bounded at 100 chars — in their OWN field since
+    STOMPY-1519; `description` itself is never cut."""
 
     def setup_method(self):
         self.service = TicketService()
         self.service.archive_stale_tickets = MagicMock(return_value=0)
 
-    def test_truncates_at_100_chars(self):
-        """Descriptions longer than 100 chars are truncated."""
+    def test_preview_truncates_at_100_chars_leaving_description_whole(self):
+        """Descriptions longer than 100 chars get a bounded preview."""
         long_desc = "x" * 150
         rows = [_make_ticket_row(id=1, description=long_desc)]
         conn, cur = _mock_conn_and_cursor(rows)
@@ -255,8 +256,10 @@ class TestBoardDescriptionTruncation:
         result = self.service.board_view(conn, SCHEMA, view="kanban", limit=0)
 
         ticket = result.columns[0].tickets[0]
-        assert len(ticket.description) == 103  # 100 + "..."
-        assert ticket.description.endswith("...")
+        assert ticket.description_preview == (
+            long_desc[: TicketService.BOARD_DESC_MAX_LENGTH] + TicketService.BOARD_DESC_ELLIPSIS
+        )
+        assert ticket.description == long_desc
 
     def test_preserves_short_descriptions(self):
         """Descriptions under 100 chars are preserved."""

@@ -964,12 +964,41 @@ class TicketService:
             include_archived=include_archived,
         )
 
-    # Maximum description length in board view responses (chars).
-    # Full descriptions are only returned via individual ticket reads.
+    # Card-excerpt length for board responses (chars). This bounds
+    # description_preview ONLY — `description` itself always travels whole.
     BOARD_DESC_MAX_LENGTH = 100
 
     # Default limit per column in kanban/compact views.
     BOARD_DEFAULT_LIMIT = 10
+
+    #: Appended when a preview is shorter than the description it excerpts.
+    BOARD_DESC_ELLIPSIS = "..."
+
+    def _attach_card_preview(self, ticket: "TicketResponse") -> None:
+        """Set a bounded card excerpt WITHOUT ever mutating `description`.
+
+        Contract, in full:
+          * description is never modified — board rows carry it whole.
+          * description_preview is always set on board responses when there
+            IS a description; it equals description when nothing was cut.
+          * a None or empty description leaves description_preview None.
+          * the excerpt is a literal prefix, never a paraphrase, and is
+            never LONGER than the text it excerpts (adding the ellipsis to
+            a 101-char description would produce 103 — sillier than just
+            sending the original).
+
+        History in STOMPY-1519: truncating description in place made the web
+        detail dialog, which reuses the board row, render a cut string.
+        """
+        if not ticket.description:
+            return
+        cutoff = self.BOARD_DESC_MAX_LENGTH + len(self.BOARD_DESC_ELLIPSIS)
+        if len(ticket.description) > cutoff:
+            ticket.description_preview = (
+                ticket.description[: self.BOARD_DESC_MAX_LENGTH] + self.BOARD_DESC_ELLIPSIS
+            )
+        else:
+            ticket.description_preview = ticket.description
 
     def board_view(
         self,
@@ -1148,8 +1177,7 @@ class TicketService:
                     tickets = []
                     for r in visible_rows:
                         ticket = self._row_to_response(r)
-                        if ticket.description and len(ticket.description) > self.BOARD_DESC_MAX_LENGTH:
-                            ticket.description = ticket.description[: self.BOARD_DESC_MAX_LENGTH] + "..."
+                        self._attach_card_preview(ticket)
                         tickets.append(ticket)
                     columns.append(
                         BoardColumn(
@@ -1197,8 +1225,7 @@ class TicketService:
                         tickets = []
                         for r in visible_rows:
                             ticket = self._row_to_response(r)
-                            if ticket.description and len(ticket.description) > self.BOARD_DESC_MAX_LENGTH:
-                                ticket.description = ticket.description[: self.BOARD_DESC_MAX_LENGTH] + "..."
+                            self._attach_card_preview(ticket)
                             tickets.append(ticket)
                         columns.append(
                             BoardColumn(

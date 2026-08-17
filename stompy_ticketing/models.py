@@ -135,6 +135,15 @@ class TicketResponse(BaseModel):
     id: int
     title: str
     description: Optional[str] = None
+    description_preview: Optional[str] = Field(
+        None,
+        description=(
+            "Card-sized excerpt of description. Set ONLY on board responses, "
+            "and there whenever a description exists; equals description when "
+            "nothing was cut. A display value must not wear a data name "
+            "(STOMPY-1519)."
+        ),
+    )
     type: str
     status: str
     priority: str
