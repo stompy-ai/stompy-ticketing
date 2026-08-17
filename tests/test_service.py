@@ -712,8 +712,9 @@ class TestBoardView:
 
         ticket = result.columns[0].tickets[0]
         assert ticket.description == long_desc  # whole, always
-        assert len(ticket.description_preview) == 103  # 100 chars + "..."
-        assert ticket.description_preview.endswith("...")
+        assert ticket.description_preview == (
+            long_desc[: TicketService.BOARD_DESC_MAX_LENGTH] + TicketService.BOARD_DESC_ELLIPSIS
+        )
 
     def test_kanban_view_preserves_short_descriptions(self):
         short_desc = "Fix the login bug"
@@ -776,7 +777,9 @@ class TestBoardView:
         assert result.total == 1
         ticket = result.columns[0].tickets[0]
         assert ticket.description == "A" * 500
-        assert len(ticket.description_preview) == 103
+        assert ticket.description_preview == (
+            "A" * TicketService.BOARD_DESC_MAX_LENGTH + TicketService.BOARD_DESC_ELLIPSIS
+        )
 
 
 # --------------------------------------------------------------------------- #

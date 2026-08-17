@@ -135,11 +135,15 @@ class TicketResponse(BaseModel):
     id: int
     title: str
     description: Optional[str] = None
-    #: Card-sized excerpt of `description`, set only on BOARD responses.
-    #: The board used to truncate `description` itself, so the web detail
-    #: dialog — which reuses the board row — rendered a cut string
-    #: (STOMPY-1519). A display value must not wear a data name.
-    description_preview: Optional[str] = None
+    description_preview: Optional[str] = Field(
+        None,
+        description=(
+            "Card-sized excerpt of description. Set ONLY on board responses, "
+            "and there whenever a description exists; equals description when "
+            "nothing was cut. A display value must not wear a data name "
+            "(STOMPY-1519)."
+        ),
+    )
     type: str
     status: str
     priority: str

@@ -48,7 +48,9 @@ def _conn(rows):
     cur = MagicMock()
     conn.cursor.return_value = cur
     cur.fetchall.return_value = rows
-    cur.fetchone.return_value = {"count": 0}
+    # Consistent with the rows we hand back — a fixture that lies about
+    # totals can mask a metadata bug (Kimi #25).
+    cur.fetchone.return_value = {"count": len(rows)}
     return conn
 
 
@@ -78,13 +80,37 @@ class TestBoardCarriesBothFullAndPreview:
         board = self.service.board_view(_conn([_row()]), SCHEMA, view="kanban")
         ticket = _first(board)
 
-        assert ticket.description_preview is not None
-        assert len(ticket.description_preview) <= TicketService.BOARD_DESC_MAX_LENGTH + 3
-        assert ticket.description_preview.endswith("...")
-        # The preview is a prefix of the real thing, not a paraphrase.
-        assert LONG.startswith(
-            ticket.description_preview[: TicketService.BOARD_DESC_MAX_LENGTH]
+        # Derived, never a literal 103 — the constant is load-bearing and a
+        # hardcoded length would silently pin a stale bound (Kimi #25).
+        assert ticket.description_preview == (
+            LONG[: TicketService.BOARD_DESC_MAX_LENGTH] + TicketService.BOARD_DESC_ELLIPSIS
         )
+
+    def test_exactly_at_the_limit_is_not_cut(self):
+        """Boundary pin: an off-by-one (> vs >=) would otherwise pass the
+        entire suite (Kimi #25)."""
+        exact = "y" * TicketService.BOARD_DESC_MAX_LENGTH
+        ticket = _first(self.service.board_view(_conn([_row(description=exact)]), SCHEMA, "kanban"))
+
+        assert ticket.description == exact
+        assert ticket.description_preview == exact
+        assert not ticket.description_preview.endswith("...")
+
+    def test_preview_is_never_longer_than_what_it_excerpts(self):
+        """101-103 chars: cutting to 100 and adding an ellipsis produces a
+        'preview' LONGER than the original. Send the original."""
+        just_over = "z" * (TicketService.BOARD_DESC_MAX_LENGTH + 2)
+        ticket = _first(
+            self.service.board_view(_conn([_row(description=just_over)]), SCHEMA, "kanban")
+        )
+
+        assert ticket.description_preview == just_over
+        assert len(ticket.description_preview) <= len(ticket.description)
+
+    def test_empty_description_leaves_preview_none(self):
+        ticket = _first(self.service.board_view(_conn([_row(description="")]), SCHEMA, "kanban"))
+
+        assert ticket.description_preview is None
 
     def test_short_description_needs_no_ellipsis(self):
         board = self.service.board_view(_conn([_row(description="brief")]), SCHEMA, view="kanban")
@@ -106,9 +132,32 @@ class TestBoardCarriesBothFullAndPreview:
         way already: CompactTicket carries no description at all. Pinned
         here so nobody 'helpfully' adds a truncated one."""
         board = self.service.board_view(_conn([_row()]), SCHEMA, view="compact")
-        column = next(c for c in board.columns if c.compact_tickets)
+        column = next((c for c in board.columns if c.compact_tickets), None)
+        assert column is not None, f"no compact tickets on the board: {board}"
 
         assert column.tickets == []
         card = column.compact_tickets[0]
         assert not hasattr(card, "description")
         assert not hasattr(card, "description_preview")
+
+
+class TestPreviewIsBoardOnly:
+    """"Set only on board responses" is a contract, so pin it — otherwise a
+    future refactor could start populating it everywhere, or nowhere, with
+    the suite still green (Kimi #25)."""
+
+    def setup_method(self):
+        self.service = TicketService()
+        self.service.archive_stale_tickets = MagicMock(return_value=0)
+
+    def test_single_ticket_read_leaves_preview_none(self):
+        conn = MagicMock()
+        cur = MagicMock()
+        conn.cursor.return_value = cur
+        cur.fetchone.return_value = _row()
+        cur.fetchall.return_value = []  # history + links queries
+
+        ticket = self.service.get_ticket(conn, SCHEMA, 1)
+
+        assert ticket.description == LONG
+        assert ticket.description_preview is None

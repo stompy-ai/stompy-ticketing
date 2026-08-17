@@ -239,7 +239,7 @@ class TestBoardCompactView:
         assert result.view == "compact"
 
 
-class TestBoardDescriptionTruncation:
+class TestBoardDescriptionPreview:
     """Card excerpts are bounded at 100 chars — in their OWN field since
     STOMPY-1519; `description` itself is never cut."""
 
@@ -256,8 +256,9 @@ class TestBoardDescriptionTruncation:
         result = self.service.board_view(conn, SCHEMA, view="kanban", limit=0)
 
         ticket = result.columns[0].tickets[0]
-        assert len(ticket.description_preview) == 103  # 100 + "..."
-        assert ticket.description_preview.endswith("...")
+        assert ticket.description_preview == (
+            long_desc[: TicketService.BOARD_DESC_MAX_LENGTH] + TicketService.BOARD_DESC_ELLIPSIS
+        )
         assert ticket.description == long_desc
 
     def test_preserves_short_descriptions(self):

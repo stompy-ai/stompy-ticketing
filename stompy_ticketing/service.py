@@ -971,21 +971,31 @@ class TicketService:
     # Default limit per column in kanban/compact views.
     BOARD_DEFAULT_LIMIT = 10
 
-    def _attach_card_preview(self, ticket) -> None:
-        """Give a board card its own bounded excerpt.
+    #: Appended when a preview is shorter than the description it excerpts.
+    BOARD_DESC_ELLIPSIS = "..."
 
-        This used to overwrite `description` in place, so the web ticket
-        detail dialog — which reuses the board row rather than re-fetching —
-        rendered a string cut at 100 chars with an ellipsis (STOMPY-1519,
-        reported by Markus 2026-08-17). A truncated field named `description`
-        is a lie every downstream consumer inherits; the card gets its own
-        field and the data keeps its meaning.
+    def _attach_card_preview(self, ticket: "TicketResponse") -> None:
+        """Set a bounded card excerpt WITHOUT ever mutating `description`.
+
+        Contract, in full:
+          * description is never modified — board rows carry it whole.
+          * description_preview is always set on board responses when there
+            IS a description; it equals description when nothing was cut.
+          * a None or empty description leaves description_preview None.
+          * the excerpt is a literal prefix, never a paraphrase, and is
+            never LONGER than the text it excerpts (adding the ellipsis to
+            a 101-char description would produce 103 — sillier than just
+            sending the original).
+
+        History in STOMPY-1519: truncating description in place made the web
+        detail dialog, which reuses the board row, render a cut string.
         """
         if not ticket.description:
             return
-        if len(ticket.description) > self.BOARD_DESC_MAX_LENGTH:
+        cutoff = self.BOARD_DESC_MAX_LENGTH + len(self.BOARD_DESC_ELLIPSIS)
+        if len(ticket.description) > cutoff:
             ticket.description_preview = (
-                ticket.description[: self.BOARD_DESC_MAX_LENGTH] + "..."
+                ticket.description[: self.BOARD_DESC_MAX_LENGTH] + self.BOARD_DESC_ELLIPSIS
             )
         else:
             ticket.description_preview = ticket.description
