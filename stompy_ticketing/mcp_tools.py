@@ -255,6 +255,12 @@ def register_ticketing_tools(
             ) as conn:
                 schema = _get_schema(project_name)
 
+                if expected_updated_at is not None and action != "update":
+                    return json.dumps({
+                        "error": "expected_updated_at only guards action=\"update\" — "
+                        "move/close have no stale-write protection yet (STOMPY-1579 follow-up)"
+                    })
+
                 if action == "create":
                     if not title:
                         return json.dumps({"error": "title is required for create"})
@@ -281,7 +287,10 @@ def register_ticketing_tools(
                 elif action == "append":
                     if not ticket_id or not description:
                         return json.dumps({"error": "ticket_id and description are required for append"})
-                    result = service.append_description(conn, schema, ticket_id, description)
+                    try:
+                        result = service.append_description(conn, schema, ticket_id, description)
+                    except ValueError as ve:
+                        return json.dumps({"error": str(ve)})
                     if not result:
                         return json.dumps({"error": f"Ticket {ticket_id} not found"})
                     return _safe_json({"status": "appended", "ticket": result.model_dump()})
@@ -309,7 +318,7 @@ def register_ticketing_tools(
                             expected_updated_at=expected_updated_at,
                         )
                     except service.Conflict as c:
-                        return json.dumps({
+                        return _safe_json({
                             "error": "CONFLICT",
                             "message": str(c),
                             "expected_updated_at": c.expected_updated_at,

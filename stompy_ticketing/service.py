@@ -341,6 +341,8 @@ class TicketService:
                 f"you expected {expected_updated_at}) — re-read and retry, or use append"
             )
 
+    MAX_APPEND_CHARS = 20_000
+
     def append_description(
         self,
         conn: DBConnection,
@@ -353,8 +355,16 @@ class TicketService:
         """Append to the description ATOMICALLY in SQL (STOMPY-1579).
 
         No read-modify-write: concurrent appends from parallel agents both
-        land, in commit order. History records the appended text only.
+        land, in commit order (the row lock serializes them). updated_at is
+        bumped IN THE SAME STATEMENT so a stale guarded update afterwards
+        conflicts instead of erasing the append. History records the
+        appended text only. Empty text and text over MAX_APPEND_CHARS are
+        rejected (a looping agent must not grow a row without bound).
         """
+        if not text or not text.strip():
+            raise ValueError("append text must be non-empty")
+        if len(text) > self.MAX_APPEND_CHARS:
+            raise ValueError(f"append text exceeds {self.MAX_APPEND_CHARS} chars")
         cur = conn.cursor()
         try:
             now = time.time()
@@ -362,13 +372,16 @@ class TicketService:
                 sql.SQL(
                     """
                 UPDATE {}.tickets
-                SET description = COALESCE(description, '') || %s || %s,
+                SET description = CASE
+                        WHEN description IS NULL OR description = '' THEN %s
+                        ELSE description || %s || %s
+                    END,
                     updated_at = %s
                 WHERE id = %s
                 RETURNING *
                 """
                 ).format(sql.Identifier(schema)),
-                (separator, text, now, ticket_id),
+                (text, separator, text, now, ticket_id),
             )
             updated_row = cur.fetchone()
             if not updated_row:
@@ -426,10 +439,10 @@ class TicketService:
             if not current:
                 return None
 
-            if expected_updated_at is not None:
-                stored = current.get("updated_at") or 0.0
-                if abs(stored - expected_updated_at) > 0.001:
-                    raise TicketService.Conflict(expected_updated_at, stored)
+            # The guard itself lives in the UPDATE's WHERE clause (single-statement
+            # compare-and-swap) — a Python-side compare here would be check-then-act
+            # and lose the race it exists to close (Kimi #26). This early read only
+            # feeds history diffs.
 
             now = time.time()
             updates = {}
@@ -471,24 +484,47 @@ class TicketService:
             if not updates:
                 return self._row_to_response(current)
 
-            # Build UPDATE query
+            # Build UPDATE query. Column names come from the fixed `updates`
+            # keys assigned above (a server-side whitelist), never from input.
             set_clauses = [f"{col} = %s" for col in updates]
             set_clauses.append("updated_at = %s")
             values = list(updates.values()) + [now, ticket_id]
+            where = "WHERE id = %s"
+            if expected_updated_at is not None:
+                # atomic compare-and-swap: the row must still be the one the
+                # caller read — exact equality, enforced by the database
+                where += " AND updated_at = %s"
+                values.append(expected_updated_at)
 
             cur.execute(
                 sql.SQL("""
                 UPDATE {}.tickets
                 SET {}
-                WHERE id = %s
+                {}
                 RETURNING *
                 """).format(
                     sql.Identifier(schema),
                     sql.SQL(', ').join(sql.SQL(c) for c in set_clauses),
+                    sql.SQL(where),
                 ),
                 values,
             )
             updated_row = cur.fetchone()
+            if updated_row is None and expected_updated_at is not None:
+                # zero rows under the guard: gone, or moved — tell them which
+                cur.execute(
+                    sql.SQL("SELECT updated_at FROM {}.tickets WHERE id = %s").format(
+                        sql.Identifier(schema)
+                    ),
+                    (ticket_id,),
+                )
+                row = cur.fetchone()
+                conn.rollback()
+                if row is None:
+                    return None
+                raise TicketService.Conflict(
+                    expected_updated_at, row.get("updated_at") or 0.0
+                )
 
             # Record history
             for field_name, old_val, new_val in history_entries:
