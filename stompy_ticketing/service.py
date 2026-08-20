@@ -327,6 +327,69 @@ class TicketService:
 
         return response
 
+    class Conflict(Exception):
+        """update_ticket's optimistic guard fired: the ticket changed since the
+        caller read it (STOMPY-1579 — a wholesale description replace silently
+        clobbered a parallel agent's re-scope). Carries both timestamps so the
+        caller can re-read, merge, and retry — or switch to append_description."""
+
+        def __init__(self, expected_updated_at: float, current_updated_at: float):
+            self.expected_updated_at = expected_updated_at
+            self.current_updated_at = current_updated_at
+            super().__init__(
+                f"ticket changed since your read (updated_at {current_updated_at}, "
+                f"you expected {expected_updated_at}) — re-read and retry, or use append"
+            )
+
+    def append_description(
+        self,
+        conn: DBConnection,
+        schema: str,
+        ticket_id: int,
+        text: str,
+        changed_by: Optional[str] = None,
+        separator: str = "\n\n",
+    ) -> Optional[TicketResponse]:
+        """Append to the description ATOMICALLY in SQL (STOMPY-1579).
+
+        No read-modify-write: concurrent appends from parallel agents both
+        land, in commit order. History records the appended text only.
+        """
+        cur = conn.cursor()
+        try:
+            now = time.time()
+            cur.execute(
+                sql.SQL(
+                    """
+                UPDATE {}.tickets
+                SET description = COALESCE(description, '') || %s || %s,
+                    updated_at = %s
+                WHERE id = %s
+                RETURNING *
+                """
+                ).format(sql.Identifier(schema)),
+                (separator, text, now, ticket_id),
+            )
+            updated_row = cur.fetchone()
+            if not updated_row:
+                conn.rollback()
+                return None
+            cur.execute(
+                sql.SQL(
+                    """
+                INSERT INTO {}.ticket_history
+                    (ticket_id, field_name, old_value, new_value, changed_by, changed_at)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """
+                ).format(sql.Identifier(schema)),
+                (ticket_id, "description_appended", None, text, changed_by, now),
+            )
+            conn.commit()
+            return self._row_to_response(updated_row)
+        except Exception:
+            conn.rollback()
+            raise
+
     def update_ticket(
         self,
         conn: DBConnection,
@@ -334,6 +397,7 @@ class TicketService:
         ticket_id: int,
         data: TicketUpdate,
         changed_by: Optional[str] = None,
+        expected_updated_at: Optional[float] = None,
     ) -> Optional[TicketResponse]:
         """Update ticket fields (not status - use transition_ticket for that).
 
@@ -343,6 +407,8 @@ class TicketService:
             ticket_id: Ticket ID.
             data: Fields to update.
             changed_by: Who made the change.
+            expected_updated_at: optimistic guard (STOMPY-1579) — refuse with
+                Conflict when the stored updated_at differs (>1ms) from this.
 
         Returns:
             Updated ticket or None if not found.
@@ -359,6 +425,11 @@ class TicketService:
             current = cur.fetchone()
             if not current:
                 return None
+
+            if expected_updated_at is not None:
+                stored = current.get("updated_at") or 0.0
+                if abs(stored - expected_updated_at) > 0.001:
+                    raise TicketService.Conflict(expected_updated_at, stored)
 
             now = time.time()
             updates = {}

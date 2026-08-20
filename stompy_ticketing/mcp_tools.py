@@ -101,7 +101,7 @@ def _safe_json(data: Any) -> str:
 # OPEN on exactly that omission. The test suite pins both totality
 # (READ | WRITE covers each tool's Literal) and disjointness.
 TICKET_WRITE_ACTIONS = frozenset(
-    {"create", "update", "move", "close", "archive", "batch_move", "batch_close"}
+    {"create", "update", "append", "move", "close", "archive", "batch_move", "batch_close"}
 )
 TICKET_READ_ACTIONS = frozenset({"get", "list", "list_tags"})
 TICKET_LINK_WRITE_ACTIONS = frozenset({"add", "remove"})
@@ -143,7 +143,7 @@ def register_ticketing_tools(
     @mcp_instance.tool()
     async def ticket(
         action: Annotated[
-            Literal["create", "get", "update", "move", "list", "list_tags", "close", "archive", "batch_move", "batch_close"],
+            Literal["create", "get", "update", "append", "move", "list", "list_tags", "close", "archive", "batch_move", "batch_close"],
             "Operation to perform",
         ],
         title: Annotated[Optional[str], "Ticket title (create/update)"] = None,
@@ -180,13 +180,18 @@ def register_ticketing_tools(
         include_archived: Annotated[bool, "Include archived tickets in list"] = False,
         project: Annotated[Optional[str], "Project name"] = None,
         grep: Annotated[Optional[str], "Filter list results by title (fnmatch glob, e.g. 'auth*', '*bug*')"] = None,
+        expected_updated_at: Annotated[
+            Optional[float],
+            "update only: optimistic guard — pass the updated_at you read; refused with CONFLICT if the ticket changed since (re-read and retry, or use append)",
+        ] = None,
     ) -> str:
         """Create, update, move, close, search, and batch-manage tickets. Supports glob filter on titles (grep param). Pass project= on every call.
 
         action → required params:
           create      → title (type defaults to task)
           get         → ticket_id
-          update      → ticket_id + fields to change
+          update      → ticket_id + fields to change (+ expected_updated_at to refuse stale writes)
+          append      → ticket_id + description (ATOMIC append — reports/results; never clobbers concurrent edits)
           move        → ticket_id + status
           list        → optional filters (type/status/priority/assignee/tags/grep)
           list_tags   → show all unique tags with usage counts (useful before filtering by tags)
@@ -273,6 +278,14 @@ def register_ticketing_tools(
                         return json.dumps({"error": f"Ticket {ticket_id} not found"})
                     return _safe_json(result)
 
+                elif action == "append":
+                    if not ticket_id or not description:
+                        return json.dumps({"error": "ticket_id and description are required for append"})
+                    result = service.append_description(conn, schema, ticket_id, description)
+                    if not result:
+                        return json.dumps({"error": f"Ticket {ticket_id} not found"})
+                    return _safe_json({"status": "appended", "ticket": result.model_dump()})
+
                 elif action == "update":
                     if not ticket_id:
                         return json.dumps({"error": "ticket_id is required for update"})
@@ -290,7 +303,19 @@ def register_ticketing_tools(
                         assignee=assignee,
                         tags=tag_list,
                     )
-                    result = service.update_ticket(conn, schema, ticket_id, data)
+                    try:
+                        result = service.update_ticket(
+                            conn, schema, ticket_id, data,
+                            expected_updated_at=expected_updated_at,
+                        )
+                    except service.Conflict as c:
+                        return json.dumps({
+                            "error": "CONFLICT",
+                            "message": str(c),
+                            "expected_updated_at": c.expected_updated_at,
+                            "current_updated_at": c.current_updated_at,
+                            "hint": "re-read with action=\"get\", merge, retry — or action=\"append\" for reports",
+                        })
                     if not result:
                         return json.dumps({"error": f"Ticket {ticket_id} not found"})
                     return _safe_json({"status": "updated", "ticket": result.model_dump()})
