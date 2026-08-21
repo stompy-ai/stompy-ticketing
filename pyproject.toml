@@ -1,6 +1,6 @@
 [project]
 name = "stompy-ticketing"
-version = "0.6.2"
+version = "0.7.0"
 description = "Ticketing plugin for Stompy AI Memory"
 requires-python = ">=3.10"
 dependencies = [
