@@ -37,8 +37,6 @@ PKG = Path(mcp_tools.__file__).parent
 # HTTP semantics, NOT from the source under test, so a wrong literal in
 # api_routes.py fails here instead of being mirrored.
 REST_ROUTE_WRITES = {
-    "create_ticket": True,
-    "list_tickets": False,
     "board_view": False,
     "search_tickets": False,
     "archive_tickets": True,

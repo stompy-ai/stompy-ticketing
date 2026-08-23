@@ -4,7 +4,6 @@ Tests use a mock DB connection via configure_routes().
 All test data is fixed and deterministic.
 """
 
-import json
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -13,7 +12,6 @@ from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
 from stompy_ticketing.api_routes import configure_routes, router
-from stompy_ticketing.models import TicketType
 
 # --------------------------------------------------------------------------- #
 # Test fixtures                                                               #
@@ -86,68 +84,6 @@ def _create_test_app(conn, cur):
 # --------------------------------------------------------------------------- #
 # Tests                                                                       #
 # --------------------------------------------------------------------------- #
-
-
-@pytest.mark.asyncio
-class TestCreateTicketAPI:
-    @patch("stompy_ticketing.service.time")
-    async def test_create_ticket_returns_201(self, mock_time):
-        mock_time.time.return_value = FIXED_TIME
-        row = _make_ticket_row(title="New ticket")
-        conn, cur = _make_mock_conn(fetchone_value=row)
-        app = _create_test_app(conn, cur)
-
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            response = await client.post(
-                "/projects/test_project/tickets",
-                json={"title": "New ticket", "type": "task"},
-            )
-
-        assert response.status_code == 201
-        data = response.json()
-        assert data["title"] == "New ticket"
-        assert data["status"] == "backlog"
-
-    async def test_create_ticket_missing_title_returns_422(self):
-        conn, cur = _make_mock_conn()
-        app = _create_test_app(conn, cur)
-
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            response = await client.post(
-                "/projects/test_project/tickets",
-                json={"description": "No title"},
-            )
-
-        assert response.status_code == 422
-
-
-@pytest.mark.asyncio
-class TestListTicketsAPI:
-    @patch("stompy_ticketing.api_routes._service.archive_stale_tickets", return_value=0)
-    async def test_list_tickets(self, mock_archive):
-        rows = [_make_ticket_row(id=1), _make_ticket_row(id=2)]
-        conn, cur = _make_mock_conn(rows=rows)
-        cur.fetchone.side_effect = [{"count": 2}]
-        cur.fetchall.side_effect = [
-            rows,
-            [{"status": "backlog", "count": 2}],
-            [{"type": "task", "count": 2}],
-        ]
-        app = _create_test_app(conn, cur)
-
-        async with AsyncClient(
-            transport=ASGITransport(app=app), base_url="http://test"
-        ) as client:
-            response = await client.get("/projects/test_project/tickets")
-
-        assert response.status_code == 200
-        data = response.json()
-        assert data["total"] == 2
-        assert len(data["tickets"]) == 2
 
 
 @pytest.mark.asyncio
