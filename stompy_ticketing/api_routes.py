@@ -1,31 +1,30 @@
 """FastAPI REST API routes for stompy-ticketing.
 
-Provides a complete CRUD API for tickets, links, and board views.
-The router is mounted at /projects/{name}/tickets by the host application.
+Ticket sub-resources, links and board views. The router is mounted at
+/projects/{name}/tickets by the host application.
+
+The HOST owns GET/POST /projects/{name}/tickets (list + create): its handlers
+go through the one project-access resolver (shared membership, write-role
+gate). The plugin's own pair was mounted AFTER the host's and never ran —
+STOMPY-1589 removed it in 0.7.1 rather than keep a dead twin.
 
 The router receives the DB connection via FastAPI dependency injection.
 """
 
-from typing import Any, Callable, List, Optional
+from typing import Callable, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, HTTPException, Query, status
 
 from stompy_ticketing.models import (
     BatchCloseRequest,
     BatchMoveRequest,
     BatchOperationResult,
     BoardView,
-    LinkType,
-    Priority,
     SearchResult,
-    TicketCreate,
     TicketLinkCreate,
     TicketLinkResponse,
-    TicketListFilters,
-    TicketListResponse,
     TicketResponse,
     TicketTransition,
-    TicketType,
     TicketUpdate,
 )
 from stompy_ticketing.service import InvalidTransitionError, TicketService
@@ -93,49 +92,6 @@ def _require_db():
 # --------------------------------------------------------------------------- #
 # Ticket CRUD                                                                 #
 # --------------------------------------------------------------------------- #
-
-
-@router.post("", response_model=TicketResponse, status_code=status.HTTP_201_CREATED)
-async def create_ticket(name: str, body: TicketCreate):
-    """Create a new ticket in the project."""
-    _require_db()
-    schema = _get_schema(name)
-    try:
-        with _get_db_for_project(name, require_write=True) as conn:
-            result = _service.create_ticket(conn, schema, body)
-        _invalidate_ticket_cache(name)
-        return result
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-@router.get("", response_model=TicketListResponse)
-async def list_tickets(
-    name: str,
-    type: Optional[TicketType] = Query(None),
-    ticket_status: Optional[str] = Query(None, alias="status"),
-    priority: Optional[Priority] = Query(None),
-    assignee: Optional[str] = Query(None),
-    search: Optional[str] = Query(None),
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    include_archived: bool = Query(False),
-):
-    """List tickets with optional filters."""
-    _require_db()
-    schema = _get_schema(name)
-    with _get_db_for_project(name, require_write=False) as conn:
-        filters = TicketListFilters(
-            type=type,
-            status=ticket_status,
-            priority=priority,
-            assignee=assignee,
-            search=search,
-            limit=limit,
-            offset=offset,
-            include_archived=include_archived,
-        )
-        return _service.list_tickets(conn, schema, filters)
 
 
 @router.get("/board", response_model=BoardView)
