@@ -249,4 +249,17 @@ def get_ticket_migrations(start_id: int = 26) -> List[Dict[str, Any]]:
                 """,
             },
         },
+        # Migration N+5: who filed it (STOMPY-1594). The identity regime is
+        # str(internal_id) — the one project_metadata.created_by uses — never
+        # the auth0 sub. Display names are resolved at read time by the host.
+        {
+            "id": start_id + 5,
+            "description": "add_tickets_created_by",
+            "type": CUSTOM,
+            "table": "tickets",
+            "schema": PROJECT_SCHEMA,
+            "spec": {
+                "sql": "ALTER TABLE {schema}.tickets ADD COLUMN IF NOT EXISTS created_by TEXT",
+            },
+        },
     ]

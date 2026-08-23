@@ -116,7 +116,8 @@ class TicketHistoryEntry(BaseModel):
     field_name: str
     old_value: Optional[str] = None
     new_value: Optional[str] = None
-    changed_by: Optional[str] = None
+    changed_by: Optional[str] = None  # str(internal_id) — identity, never a note (1594)
+    changed_by_display: Optional[str] = None  # resolved at read time by the host
     changed_at: Optional[float] = None
 
 
@@ -151,6 +152,8 @@ class TicketResponse(BaseModel):
     tags: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
     session_id: Optional[str] = None
+    created_by: Optional[str] = None  # str(internal_id) of the filer (STOMPY-1594)
+    created_by_display: Optional[str] = None  # resolved at read time by the host
     created_at: Optional[float] = None
     updated_at: Optional[float] = None
     closed_at: Optional[float] = None

@@ -117,8 +117,16 @@ def register_ticketing_tools(
     notify_resolution_func: Optional[Callable] = None,
     resolve_prefix_func: Optional[Callable] = None,
     get_prefix_func: Optional[Callable] = None,
+    actor_func: Optional[Callable] = None,
+    display_actors_func: Optional[Callable] = None,
 ) -> None:
     """Register ticketing MCP tools on the given FastMCP instance.
+
+    actor_func() -> Optional[str]: the caller's identity as str(internal_id)
+    (STOMPY-1594) — written as tickets.created_by on create and as
+    ticket_history.changed_by on every write. display_actors_func(ids) ->
+    {id: display} resolves those ids for the reader (ticket get). Both
+    optional: an older host leaves the columns NULL, as before.
 
     Args:
         mcp_instance: FastMCP server to register tools on.
@@ -135,6 +143,30 @@ def register_ticketing_tools(
             resolution emails on mcp_global tickets.
     """
     service = TicketService()
+
+    def _actor() -> Optional[str]:
+        """Who is writing (STOMPY-1594) — never raises into a write."""
+        try:
+            return actor_func() if actor_func else None
+        except Exception:
+            return None
+
+    def _decorate(ticket):
+        """Fill created_by_display / changed_by_display for the reader."""
+        ids = {ticket.created_by} | {h.changed_by for h in getattr(ticket, "history", [])}
+        ids.discard(None)
+        if not ids or not display_actors_func:
+            return ticket
+        try:
+            names = display_actors_func(sorted(ids)) or {}
+        except Exception:
+            return ticket
+        if ticket.created_by:
+            ticket.created_by_display = names.get(ticket.created_by)
+        for h in getattr(ticket, "history", []):
+            if h.changed_by:
+                h.changed_by_display = names.get(h.changed_by)
+        return ticket
 
     def _get_schema(project_name: str) -> str:
         """Resolve project name to PostgreSQL schema name."""
@@ -273,7 +305,7 @@ def register_ticketing_tools(
                         assignee=assignee,
                         tags=tag_list,
                     )
-                    result = service.create_ticket(conn, schema, data)
+                    result = service.create_ticket(conn, schema, data, changed_by=_actor())
                     return _safe_json({"status": "created", "ticket": result.model_dump()})
 
                 elif action == "get":
@@ -282,13 +314,15 @@ def register_ticketing_tools(
                     result = service.get_ticket(conn, schema, ticket_id)
                     if not result:
                         return json.dumps({"error": f"Ticket {ticket_id} not found"})
-                    return _safe_json(result)
+                    return _safe_json(_decorate(result))
 
                 elif action == "append":
                     if not ticket_id or not description:
                         return json.dumps({"error": "ticket_id and description are required for append"})
                     try:
-                        result = service.append_description(conn, schema, ticket_id, description)
+                        result = service.append_description(
+                            conn, schema, ticket_id, description, changed_by=_actor()
+                        )
                     except ValueError as ve:
                         return json.dumps({"error": str(ve)})
                     if not result:
@@ -316,6 +350,7 @@ def register_ticketing_tools(
                         result = service.update_ticket(
                             conn, schema, ticket_id, data,
                             expected_updated_at=expected_updated_at,
+                            changed_by=_actor(),
                         )
                     except service.Conflict as c:
                         return _safe_json({
@@ -334,7 +369,9 @@ def register_ticketing_tools(
                         return json.dumps(
                             {"error": "ticket_id and status are required for move"}
                         )
-                    result = service.transition_ticket(conn, schema, ticket_id, status)
+                    result = service.transition_ticket(
+                        conn, schema, ticket_id, status, changed_by=_actor()
+                    )
                     if not result:
                         return json.dumps({"error": f"Ticket {ticket_id} not found"})
 
@@ -413,7 +450,7 @@ def register_ticketing_tools(
                     if not ticket_id:
                         return json.dumps({"error": "ticket_id is required for close"})
                     result = service.close_ticket(
-                        conn, schema, ticket_id, resolution=resolution,
+                        conn, schema, ticket_id, resolution=resolution, changed_by=_actor(),
                     )
                     if not result:
                         return json.dumps({"error": f"Ticket {ticket_id} not found"})
