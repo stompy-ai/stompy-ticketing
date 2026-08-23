@@ -253,8 +253,9 @@ class TicketService:
                 sql.SQL("""
                 INSERT INTO {}.tickets
                     (title, description, type, status, priority, assignee,
-                     tags, metadata, session_id, content_hash, created_at, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     tags, metadata, session_id, content_hash, created_at, updated_at,
+                     created_by)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
                 """).format(sql.Identifier(schema)),
                 (
@@ -270,6 +271,7 @@ class TicketService:
                     content_hash,
                     now,
                     now,
+                    changed_by,  # the filer (STOMPY-1594)
                 ),
             )
             row = cur.fetchone()
@@ -2119,6 +2121,7 @@ class TicketService:
             tags=tags,
             metadata=metadata,
             session_id=row.get("session_id"),
+            created_by=row.get("created_by"),
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),
             closed_at=row.get("closed_at"),

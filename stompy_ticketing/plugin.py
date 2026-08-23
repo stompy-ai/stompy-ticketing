@@ -26,6 +26,8 @@ def register_plugin(
     cache_invalidator_func: Optional[Callable] = None,
     resolve_prefix_func: Optional[Callable] = None,
     get_prefix_func: Optional[Callable] = None,
+    actor_func: Optional[Callable] = None,
+    display_actors_func: Optional[Callable] = None,
 ) -> Dict[str, Any]:
     """One-call plugin registration.
 
@@ -61,6 +63,8 @@ def register_plugin(
         notify_resolution_func=notify_resolution_func,
         resolve_prefix_func=resolve_prefix_func,
         get_prefix_func=get_prefix_func,
+        actor_func=actor_func,
+        display_actors_func=display_actors_func,
     )
     logger.info("stompy_ticketing: MCP tools registered (4 tools)")
 
