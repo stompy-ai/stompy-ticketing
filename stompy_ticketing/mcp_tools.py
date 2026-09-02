@@ -17,6 +17,7 @@ import json
 import time as _time
 from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 
+from stompy_ticketing.errors import not_found_error
 from stompy_ticketing.refs import TicketRefError, coerce_ticket_ref, format_display_id
 
 from psycopg2 import OperationalError as _OperationalError
@@ -313,7 +314,7 @@ def register_ticketing_tools(
                         return json.dumps({"error": "ticket_id is required for get"})
                     result = service.get_ticket(conn, schema, ticket_id)
                     if not result:
-                        return json.dumps({"error": f"Ticket {ticket_id} not found"})
+                        return not_found_error("Ticket", ticket_id)
                     return _safe_json(_decorate(result))
 
                 elif action == "append":
@@ -326,7 +327,7 @@ def register_ticketing_tools(
                     except ValueError as ve:
                         return json.dumps({"error": str(ve)})
                     if not result:
-                        return json.dumps({"error": f"Ticket {ticket_id} not found"})
+                        return not_found_error("Ticket", ticket_id)
                     return _safe_json({"status": "appended", "ticket": result.model_dump()})
 
                 elif action == "update":
@@ -361,7 +362,7 @@ def register_ticketing_tools(
                             "hint": "re-read with action=\"get\", merge, retry — or action=\"append\" for reports",
                         })
                     if not result:
-                        return json.dumps({"error": f"Ticket {ticket_id} not found"})
+                        return not_found_error("Ticket", ticket_id)
                     return _safe_json({"status": "updated", "ticket": result.model_dump()})
 
                 elif action == "move":
@@ -373,7 +374,7 @@ def register_ticketing_tools(
                         conn, schema, ticket_id, status, changed_by=_actor()
                     )
                     if not result:
-                        return json.dumps({"error": f"Ticket {ticket_id} not found"})
+                        return not_found_error("Ticket", ticket_id)
 
                     # Email notification for bug ticket resolutions in mcp_global
                     if (
@@ -453,7 +454,7 @@ def register_ticketing_tools(
                         conn, schema, ticket_id, resolution=resolution, changed_by=_actor(),
                     )
                     if not result:
-                        return json.dumps({"error": f"Ticket {ticket_id} not found"})
+                        return not_found_error("Ticket", ticket_id)
                     return _safe_json({"status": "closed", "ticket": result.model_dump()})
 
                 elif action == "batch_move":
