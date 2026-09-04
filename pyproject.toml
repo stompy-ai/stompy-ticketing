@@ -1,12 +1,13 @@
 [project]
 name = "stompy-ticketing"
-version = "0.8.2"
+version = "0.8.3"
 description = "Ticketing plugin for Stompy AI Memory"
 requires-python = ">=3.10"
 dependencies = [
     "fastapi",
     "pydantic>=2.0",
     "python-toon==0.1.3",
+    "psycopg2-binary>=2.9.9,<3.0.0",  # imported by schema.py/service.py/mcp_tools.py; same flavour the host pins
 ]
 
 [project.optional-dependencies]

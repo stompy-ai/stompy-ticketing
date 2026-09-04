@@ -1,0 +1,31 @@
+# STOMPY-1932: this package ships into prod the moment dementia-production
+# bumps its git-hash pin, and until this file existed nothing gated a merge
+# here — PR #29 sat open with zero checks. Same shape as the host: pytest is
+# required on every PR and on main; `main` is protected on this check.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    name: pytest (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11"]  # host runtime is 3.11; requires-python >=3.10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Test
+        run: python -m pytest tests -q -p no:cacheprovider
