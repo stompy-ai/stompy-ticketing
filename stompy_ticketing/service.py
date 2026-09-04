@@ -176,45 +176,71 @@ def get_hidden_statuses(ticket_type: Optional[str] = None) -> List[str]:
     return sorted(hidden)
 
 
+PARK_REASON_MAX = 2000
+
+
+def _validate_park_args(
+    target_status: str, reason: Optional[str], revisit_by: Optional[str]
+) -> None:
+    """Refuse a park without a reason, a bad revisit_by, or park-only args
+    on a non-park move (a silently dropped argument is the STOMPY-1364
+    shape this feature exists to end)."""
+    if target_status != PARKED:
+        if reason is not None or revisit_by is not None:
+            raise ParkArgumentError(
+                "reason/revisit_by only apply to status='parked'; "
+                f"drop them for a move to '{target_status}'"
+            )
+        return
+    if not isinstance(reason, str) or not reason.strip():
+        raise ParkArgumentError(
+            "Parking requires a reason: pass reason='why this is not now'"
+        )
+    if len(reason) > PARK_REASON_MAX:
+        raise ParkArgumentError(
+            f"reason is {len(reason)} chars; max {PARK_REASON_MAX} — put the essay on the ticket"
+        )
+    if revisit_by is not None:
+        try:
+            date.fromisoformat(revisit_by)
+        except (ValueError, TypeError):
+            raise ParkArgumentError(
+                f"revisit_by must be an ISO date (YYYY-MM-DD), got {revisit_by!r}"
+            )
+
+
 def _park_metadata(
     current_metadata: Optional[str],
+    current_status: str,
     target_status: str,
     reason: Optional[str],
     revisit_by: Optional[str],
     now: float,
 ) -> Optional[str]:
     """Serialized metadata to write for a park/reopen, or None to leave the
-    column untouched. Entering PARKED requires a reason and an ISO
-    revisit_by if given; leaving PARKED drops the `parked` key."""
-    if target_status == PARKED:
-        if not reason or not reason.strip():
-            raise ParkArgumentError(
-                "Parking requires a reason: pass reason='why this is not now'"
-            )
-        if revisit_by is not None:
-            try:
-                date.fromisoformat(revisit_by)
-            except ValueError:
-                raise ParkArgumentError(
-                    f"revisit_by must be an ISO date (YYYY-MM-DD), got {revisit_by!r}"
-                )
+    column untouched. The `metadata.parked` contract (the web board reads
+    it): {reason, revisit_by (ISO date or null), parked_at (epoch),
+    from_status}; present only while status == parked."""
+    _validate_park_args(target_status, reason, revisit_by)
+    if target_status != PARKED and current_status != PARKED:
+        return None
     meta: Dict[str, Any] = {}
     if current_metadata:
         try:
             meta = json.loads(current_metadata) or {}
         except (json.JSONDecodeError, TypeError):
-            meta = {}
+            # Unreadable already; keep the bytes rather than destroy evidence.
+            meta = {"_unparseable_metadata": str(current_metadata)}
     if target_status == PARKED:
         meta["parked"] = {
             "reason": reason.strip(),
             "revisit_by": revisit_by,
             "parked_at": now,
+            "from_status": current_status,
         }
-        return json.dumps(meta)
-    if "parked" in meta:
-        meta.pop("parked")
-        return json.dumps(meta)
-    return None
+    else:
+        meta.pop("parked", None)
+    return json.dumps(meta)
 
 
 def validate_transition(
@@ -672,7 +698,7 @@ class TicketService:
             closed_at = now if target_status in get_terminal_statuses(ticket_type) else None
             # None = leave metadata alone; a string = park/reopen rewrote it.
             metadata_text = _park_metadata(
-                current.get("metadata"), target_status, reason, revisit_by, now
+                current.get("metadata"), current_status, target_status, reason, revisit_by, now
             )
 
             set_sql = "status = %s, updated_at = %s, closed_at = %s"
@@ -1514,11 +1540,11 @@ class TicketService:
                 )],
                 dry_run=not confirm,
             )
-        if target_status == PARKED:
+        if target_status == PARKED or reason is not None or revisit_by is not None:
             # Fail the whole batch up front rather than N identical per-row
             # refusals after N SELECTs.
             try:
-                _park_metadata(None, PARKED, reason, revisit_by, 0.0)
+                _validate_park_args(target_status, reason, revisit_by)
             except ParkArgumentError as e:
                 return BatchOperationResult(
                     action="batch_move",

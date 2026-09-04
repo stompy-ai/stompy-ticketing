@@ -174,8 +174,11 @@ class TestTransitionToParked:
         with pytest.raises(ParkArgumentError, match="reason"):
             self.service.transition_ticket(conn, SCHEMA, 1, PARKED)
 
-        # Nothing was written: the refusal happens before the UPDATE.
-        assert not any("UPDATE" in _sql_text(c.args[0]) for c in cur.execute.call_args_list)
+        # Nothing was written: the refusal happens before the UPDATE and the history INSERT.
+        assert not any(
+            "UPDATE" in _sql_text(c.args[0]) or "INSERT" in _sql_text(c.args[0])
+            for c in cur.execute.call_args_list
+        )
         conn.commit.assert_not_called()
 
     def test_park_rejects_non_iso_revisit_by(self):
@@ -193,7 +196,10 @@ class TestTransitionToParked:
         current = _row(status="backlog", metadata=json.dumps({"kept": 1}))
         parked_meta = {
             "kept": 1,
-            "parked": {"reason": "pre-beta expansion", "revisit_by": "2026-12-01", "parked_at": FIXED_TIME},
+            "parked": {
+                "reason": "pre-beta expansion", "revisit_by": "2026-12-01",
+                "parked_at": FIXED_TIME, "from_status": "backlog",
+            },
         }
         updated = _row(status=PARKED, metadata=json.dumps(parked_meta))
         conn, cur = _conn()
@@ -229,7 +235,7 @@ class TestTransitionToParked:
         mock_time.time.return_value = FIXED_TIME
         current = _row(
             status=PARKED,
-            metadata=json.dumps({"kept": 1, "parked": {"reason": "x", "revisit_by": None, "parked_at": 1.0}}),
+            metadata=json.dumps({"kept": 1, "parked": {"reason": "x", "revisit_by": None, "parked_at": 1.0, "from_status": "backlog"}}),
         )
         updated = _row(status="backlog", metadata=json.dumps({"kept": 1}))
         conn, cur = _conn()
@@ -256,6 +262,56 @@ class TestTransitionToParked:
         assert "metadata" not in text
         assert len(params) == 4
 
+    @patch("stompy_ticketing.service.time")
+    def test_stale_parked_key_on_a_non_parked_ticket_is_left_alone(self, mock_time):
+        """Only LEAVING parked clears the key; an ordinary move never rewrites metadata."""
+        mock_time.time.return_value = FIXED_TIME
+        stale = json.dumps({"parked": {"reason": "old"}})
+        conn, cur = _conn()
+        cur.fetchone.side_effect = [_row(status="backlog", metadata=stale), _row(status="in_progress", metadata=stale)]
+
+        self.service.transition_ticket(conn, SCHEMA, 1, "in_progress")
+
+        text, _ = _executed(cur, "UPDATE")
+        assert "metadata" not in text
+
+    def test_park_args_on_a_non_park_move_are_refused_not_dropped(self):
+        conn, cur = _conn()
+        cur.fetchone.return_value = _row(status="backlog")
+
+        with pytest.raises(ParkArgumentError, match="only apply to status='parked'"):
+            self.service.transition_ticket(conn, SCHEMA, 1, "in_progress", reason="why")
+        with pytest.raises(ParkArgumentError, match="only apply to status='parked'"):
+            self.service.transition_ticket(conn, SCHEMA, 1, "in_progress", revisit_by="2026-12-01")
+        conn.commit.assert_not_called()
+
+    def test_non_string_revisit_by_is_a_park_argument_error_not_a_type_error(self):
+        conn, cur = _conn()
+        cur.fetchone.return_value = _row(status="backlog")
+
+        with pytest.raises(ParkArgumentError, match="revisit_by"):
+            self.service.transition_ticket(conn, SCHEMA, 1, PARKED, reason="r", revisit_by=20261201)
+
+    def test_reason_has_a_length_cap(self):
+        conn, cur = _conn()
+        cur.fetchone.return_value = _row(status="backlog")
+
+        with pytest.raises(ParkArgumentError, match="max 2000"):
+            self.service.transition_ticket(conn, SCHEMA, 1, PARKED, reason="x" * 2001)
+
+    @patch("stompy_ticketing.service.time")
+    def test_park_keeps_unparseable_metadata_as_evidence(self, mock_time):
+        mock_time.time.return_value = FIXED_TIME
+        conn, cur = _conn()
+        cur.fetchone.side_effect = [_row(status="backlog", metadata="{not json"), _row(status=PARKED)]
+
+        self.service.transition_ticket(conn, SCHEMA, 1, PARKED, reason="r")
+
+        _, params = _executed(cur, "UPDATE")
+        written = json.loads(params[3])
+        assert written["_unparseable_metadata"] == "{not json"
+        assert written["parked"]["from_status"] == "backlog"
+
 
 class TestBatchPark:
     def setup_method(self):
@@ -269,6 +325,15 @@ class TestBatchPark:
         assert result.succeeded == 0
         assert result.failed == 2
         assert "reason" in result.results[0].error
+        cur.execute.assert_not_called()
+
+    def test_batch_park_args_on_non_park_target_fail_up_front(self):
+        conn, cur = _conn()
+
+        result = self.service.batch_transition(conn, SCHEMA, [1, 2], "in_progress", reason="why")
+
+        assert result.failed == 2
+        assert "only apply to status='parked'" in result.results[0].error
         cur.execute.assert_not_called()
 
     def test_batch_park_passes_reason_and_revisit_to_each_transition(self):
