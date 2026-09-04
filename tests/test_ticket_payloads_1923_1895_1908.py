@@ -276,6 +276,21 @@ class TestMoveAnswersWithTheChange:
         assert "description" not in out["ticket"]
         assert "history" not in out["ticket"]
 
+    def test_previous_status_is_the_latest_transition_whatever_the_history_order(self):
+        tools, svc = _register()
+        from stompy_ticketing.models import TicketHistoryEntry
+
+        # Oldest-first here; _fetch_history is newest-first — both must work.
+        svc.transition_ticket.return_value = TicketResponse(
+            id=7, title="t", type="bug", status="in_progress", priority="high", updated_at=FIXED_TIME,
+            history=[
+                TicketHistoryEntry(id=1, field_name="status", old_value="triage", new_value="confirmed", changed_at=1.0),
+                TicketHistoryEntry(id=2, field_name="status", old_value="confirmed", new_value="in_progress", changed_at=2.0),
+            ],
+        )
+        out = _parse(_run(tools["ticket"](action="move", ticket_id=7, status="in_progress", project=SCHEMA)))
+        assert out["ticket"]["previous_status"] == "confirmed"
+
     def test_close_returns_status_change_not_the_record(self):
         tools, svc = _register()
         svc.close_ticket.return_value = TicketResponse(

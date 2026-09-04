@@ -113,10 +113,11 @@ def _status_change(ticket: Any) -> dict:
     """What a transition changed (STOMPY-1895): the id, the new status, the
     status it left, when. The caller supplied the body and already has it;
     action='get' has the record."""
-    previous = next(
-        (h.old_value for h in getattr(ticket, "history", []) if h.field_name == "status"),
-        None,
-    )
+    # The LATEST status row, whatever order history arrived in (it is
+    # newest-first from _fetch_history, but this must not depend on that).
+    status_rows = [h for h in getattr(ticket, "history", []) if h.field_name == "status"]
+    latest = max(status_rows, key=lambda h: (h.changed_at or 0, h.id), default=None)
+    previous = latest.old_value if latest else None
     return {
         "id": ticket.id,
         "title": ticket.title,
