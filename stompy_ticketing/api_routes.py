@@ -171,6 +171,8 @@ async def batch_move(name: str, body: BatchMoveRequest):
             conn, schema, body.ticket_ids, body.status,
             confirm=body.confirm,
             changed_by=body.note,
+            reason=body.reason,
+            revisit_by=body.revisit_by,
         )
     if body.confirm:
         _invalidate_ticket_cache(name)
@@ -243,7 +245,10 @@ async def transition_ticket(name: str, ticket_id: int, body: TicketTransition):
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=True) as conn:
         try:
-            result = _service.transition_ticket(conn, schema, ticket_id, body.status)
+            result = _service.transition_ticket(
+                conn, schema, ticket_id, body.status,
+                reason=body.reason, revisit_by=body.revisit_by,
+            )
             if not result:
                 raise HTTPException(
                     status_code=404, detail=f"Ticket {ticket_id} not found"

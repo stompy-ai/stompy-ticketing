@@ -68,6 +68,9 @@ class TicketUpdate(BaseModel):
 
 class TicketTransition(BaseModel):
     status: str
+    # STOMPY-1746: required when status == "parked"; revisit_by is an ISO date.
+    reason: Optional[str] = None
+    revisit_by: Optional[str] = None
 
 
 class TicketLinkCreate(BaseModel):
@@ -86,6 +89,9 @@ class BatchMoveRequest(BaseModel):
     status: str
     confirm: bool = False
     note: Optional[str] = None
+    # STOMPY-1746: one reason for the whole batch; required for "parked".
+    reason: Optional[str] = None
+    revisit_by: Optional[str] = None
 
 
 class BatchCloseRequest(BaseModel):

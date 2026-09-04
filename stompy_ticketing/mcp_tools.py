@@ -17,7 +17,7 @@ import json
 import time as _time
 from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 
-from stompy_ticketing.errors import not_found_error
+from stompy_ticketing.errors import mcp_error, not_found_error, recoverable_error
 from stompy_ticketing.refs import TicketRefError, coerce_ticket_ref, format_display_id
 
 from psycopg2 import OperationalError as _OperationalError
@@ -35,6 +35,7 @@ from stompy_ticketing.models import (
 )
 from stompy_ticketing.service import (
     InvalidTransitionError,
+    ParkArgumentError,
     LinkAlreadyExistsError,
     TicketService,
 )
@@ -217,6 +218,14 @@ def register_ticketing_tools(
             Optional[float],
             "update only: optimistic guard — pass the updated_at you read; refused with CONFLICT if the ticket changed since (re-read and retry, or use append)",
         ] = None,
+        reason: Annotated[
+            Optional[str],
+            "move/batch_move to status='parked' only: REQUIRED — why this is deliberately not now",
+        ] = None,
+        revisit_by: Annotated[
+            Optional[str],
+            "move/batch_move to status='parked' only: optional ISO date (YYYY-MM-DD) to look again",
+        ] = None,
     ) -> str:
         """Create, update, move, close, search, and batch-manage tickets. Supports glob filter on titles (grep param). Pass project= on every call.
 
@@ -225,16 +234,17 @@ def register_ticketing_tools(
           get         → ticket_id
           update      → ticket_id + fields to change (+ expected_updated_at to refuse stale writes)
           append      → ticket_id + description (ATOMIC append — reports/results; never clobbers concurrent edits)
-          move        → ticket_id + status
+          move        → ticket_id + status (status='parked' also needs reason; optional revisit_by)
           list        → optional filters (type/status/priority/assignee/tags/grep)
           list_tags   → show all unique tags with usage counts (useful before filtering by tags)
           close       → ticket_id
-          archive     → (none)
-          batch_move  → ticket_ids + status; confirm=True to execute
+          archive     → (none — global sweep of long-closed tickets; to shelve ONE ticket use move + status='parked')
+          batch_move  → ticket_ids + status; confirm=True to execute (parked: one reason for the batch)
           batch_close → ticket_ids; confirm=True to execute
 
         Initial statuses: task→backlog, bug→triage, feature→proposed, decision→open.
-        Terminal: task→done/cancelled, bug→resolved/wont_fix, feature→shipped/rejected, decision→decided/deferred."""
+        Terminal: task→done/cancelled, bug→resolved/wont_fix, feature→shipped/rejected, decision→decided/deferred.
+        Parked ("not now", every type): from backlog/triage/confirmed/proposed/approved/open, back in one step; hidden from the board like terminals; list with status='parked'."""
         _prefix_token = None
         try:
             # Dual-format ref coercion (design 2026-07-27): a prefixed id
@@ -371,7 +381,8 @@ def register_ticketing_tools(
                             {"error": "ticket_id and status are required for move"}
                         )
                     result = service.transition_ticket(
-                        conn, schema, ticket_id, status, changed_by=_actor()
+                        conn, schema, ticket_id, status, changed_by=_actor(),
+                        reason=reason, revisit_by=revisit_by,
                     )
                     if not result:
                         return not_found_error("Ticket", ticket_id)
@@ -440,6 +451,15 @@ def register_ticketing_tools(
                     return _safe_json({"tags": result, "total": len(result)})
 
                 elif action == "archive":
+                    if ticket_id is not None or ticket_ids:
+                        # A silently ignored parameter is the STOMPY-1364
+                        # --deselect shape: refuse, and name the real tool.
+                        return mcp_error(
+                            "INVALID_PARAMS",
+                            "archive is a global sweep of long-closed tickets and takes "
+                            "no ticket_id/ticket_ids. To shelve a ticket, use "
+                            "action='move' with status='parked' and a reason.",
+                        )
                     count = service.archive_stale_tickets(conn, schema)
                     return json.dumps({
                         "status": "archived",
@@ -468,7 +488,8 @@ def register_ticketing_tools(
                         return json.dumps({"error": "ticket_ids must be comma-separated integers"})
                     result = service.batch_transition(
                         conn, schema, parsed_ids, status,
-                        confirm=confirm,
+                        confirm=confirm, changed_by=_actor(),
+                        reason=reason, revisit_by=revisit_by,
                     )
                     return _safe_json(result)
 
@@ -493,12 +514,21 @@ def register_ticketing_tools(
                         {
                             "error": f"Unknown action: {action}",
                             "valid_actions": [
-                                "create", "get", "update", "move", "list", "list_tags",
+                                "create", "get", "update", "append", "move", "list", "list_tags",
                                 "close", "archive", "batch_move", "batch_close",
                             ],
                         }
                     )
 
+        except ParkArgumentError as e:
+            return recoverable_error(
+                "PARK_ARGUMENT",
+                str(e),
+                [
+                    "Pass reason='why this is deliberately not now'",
+                    "revisit_by, if given, is an ISO date: YYYY-MM-DD",
+                ],
+            )
         except InvalidTransitionError as e:
             return json.dumps({"error": str(e), "error_type": "InvalidTransition"})
         except ValueError as e:
@@ -667,12 +697,12 @@ def register_ticketing_tools(
             "Filter by ticket type",
         ] = None,
         status: Annotated[Optional[str], "Filter by specific status"] = None,
-        include_terminal: Annotated[bool, "Include terminal statuses (done, resolved, etc.)"] = False,
+        include_terminal: Annotated[bool, "Include terminal statuses (done, resolved, etc.) and parked"] = False,
         include_archived: Annotated[bool, "Include archived tickets"] = False,
         limit: Annotated[Optional[int], "Max tickets per column (default 10, 0=all)"] = None,
         project: Annotated[Optional[str], "Project name"] = None,
     ) -> str:
-        """Ticket board grouped by status. Excludes terminal statuses (done, cancelled, resolved, wont_fix, shipped, rejected, decided, deferred) by default — pass include_terminal=true to show them."""
+        """Ticket board grouped by status. Excludes terminal statuses (done, cancelled, resolved, wont_fix, shipped, rejected, decided, deferred) AND parked by default — pass include_terminal=true to show them."""
         project_check = check_project_func(project)
         if project_check:
             return project_check
