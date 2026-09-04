@@ -281,13 +281,47 @@ def validate_transition(
     allowed = transitions[current_status]
     if target_status not in allowed:
         if raise_on_invalid:
+            # STOMPY-1895: the error teaches the PATH, not just the next hop —
+            # otherwise an agent learns the graph one refusal per state.
+            path = find_transition_path(ticket_type, current_status, target_status)
+            if path:
+                hint = f" Path: {' → '.join(path)}."
+                if target_status in sm["terminal"]:
+                    hint += (
+                        f" action='close' with resolution='{target_status}' walks it in one call."
+                    )
+            else:
+                hint = f" '{target_status}' is not reachable from '{current_status}'."
             raise InvalidTransitionError(
                 f"Cannot transition {ticket_type} from '{current_status}' to "
-                f"'{target_status}'. Allowed: {allowed}"
+                f"'{target_status}'. Allowed next: {allowed}.{hint}"
             )
         return False
 
     return True
+
+
+def find_transition_path(ticket_type: str, current_status: str, target_status: str) -> Optional[List[str]]:
+    """Shortest legal path from current_status to target_status (BFS over the
+    type's transitions), excluding the start; None when unreachable."""
+    from collections import deque
+
+    transitions = STATE_MACHINES.get(ticket_type, {}).get("transitions", {})
+    if current_status == target_status:
+        return None
+    queue: deque = deque([(current_status, [])])
+    visited = {current_status}
+    while queue:
+        status, path = queue.popleft()
+        for nxt in transitions.get(status, []):
+            if nxt in visited:
+                continue
+            new_path = path + [nxt]
+            if nxt == target_status:
+                return new_path
+            visited.add(nxt)
+            queue.append((nxt, new_path))
+    return None
 
 
 # =========================================================================== #
@@ -894,13 +928,18 @@ class TicketService:
         conn: DBConnection,
         schema: str,
         filters: Optional[TicketListFilters] = None,
+        fields: str = "card",
     ) -> TicketListResponse:
         """List tickets with optional filters.
+
+        Rows are CARDS unless fields="full" (STOMPY-1923): list is the
+        orientation call and must be the cheapest one; `get` has the body.
 
         Args:
             conn: Database connection.
             schema: PostgreSQL schema name.
             filters: Filter/pagination options.
+            fields: "card" (default) or "full".
 
         Returns:
             List of tickets with counts.
@@ -1005,8 +1044,11 @@ class TicketService:
         )
         by_type = {r["type"]: r["count"] for r in cur.fetchall()}
 
+        tickets = [self._row_to_response(r) for r in rows]
+        if fields != "full":
+            tickets = [self.to_card(t) for t in tickets]
         return TicketListResponse(
-            tickets=[self._row_to_response(r) for r in rows],
+            tickets=tickets,
             total=total,
             limit=filters.limit,
             offset=filters.offset,
@@ -1109,8 +1151,12 @@ class TicketService:
         status_filter: Optional[str] = None,
         limit: int = 20,
         include_archived: bool = False,
+        fields: str = "card",
     ) -> SearchResult:
         """Full-text search tickets using tsvector with OR-based ranking.
+
+        Rows are CARDS unless fields="full" (STOMPY-1923): no description
+        body, a bounded description_preview instead.
 
         Uses OR logic between query terms so that partial matches are returned,
         ranked by ts_rank (documents matching more terms rank higher).
@@ -1188,9 +1234,11 @@ class TicketService:
                 params + [limit],
             )
         rows = cur.fetchall()
-
+        tickets = [self._row_to_response(r) for r in rows]
+        if fields != "full":
+            tickets = [self.to_card(t) for t in tickets]
         return SearchResult(
-            tickets=[self._row_to_response(r) for r in rows],
+            tickets=tickets,
             total=len(rows),
             query=query,
             include_archived=include_archived,
@@ -1205,6 +1253,25 @@ class TicketService:
 
     #: Appended when a preview is shorter than the description it excerpts.
     BOARD_DESC_ELLIPSIS = "..."
+
+    @classmethod
+    def to_card(cls, ticket: "TicketResponse") -> "TicketResponse":
+        """CARD projection of a ticket (STOMPY-1923): the orientation shape
+        list/search return by default — everything but the body and the
+        sub-collections, plus the bounded description_preview. A pure
+        copy; the source record is untouched. `get` returns the full record."""
+        card = ticket.model_copy(
+            update={"description": None, "history": [], "links": [], "context_links": []}
+        )
+        # Preview from the ORIGINAL body (the copy has none).
+        if ticket.description:
+            cutoff = cls.BOARD_DESC_MAX_LENGTH + len(cls.BOARD_DESC_ELLIPSIS)
+            card.description_preview = (
+                ticket.description[: cls.BOARD_DESC_MAX_LENGTH] + cls.BOARD_DESC_ELLIPSIS
+                if len(ticket.description) > cutoff
+                else ticket.description
+            )
+        return card
 
     def _attach_card_preview(self, ticket: "TicketResponse") -> None:
         """Set a bounded card excerpt WITHOUT ever mutating `description`.

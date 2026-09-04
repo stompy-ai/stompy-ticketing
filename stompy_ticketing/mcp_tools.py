@@ -87,9 +87,46 @@ def _safe_json(data: Any) -> str:
         _prefix = _display_prefix.get()
         if _prefix:
             data = _decorate_display_ids(data, _prefix)
-        return _toon_encode(data)
+        return _toon_encode(_omit_empty(data))
     except Exception as e:
         return json.dumps({"error": str(e)})
+
+
+def _omit_empty(obj: Any) -> Any:
+    """Drop None values and empty collections, recursively (STOMPY-1908).
+    Eight keys of `null` / `[]` per ticket said nothing; a caller that needs
+    history asks for it. Zero and False are values and stay."""
+    if isinstance(obj, dict):
+        out = {}
+        for k, v in obj.items():
+            v = _omit_empty(v)
+            if v is None or (isinstance(v, (list, dict)) and not v):
+                continue
+            out[k] = v
+        return out
+    if isinstance(obj, list):
+        return [_omit_empty(v) for v in obj]
+    return obj
+
+
+def _status_change(ticket: Any) -> dict:
+    """What a transition changed (STOMPY-1895): the id, the new status, the
+    status it left, when. The caller supplied the body and already has it;
+    action='get' has the record."""
+    # The LATEST status row, whatever order history arrived in (it is
+    # newest-first from _fetch_history, but this must not depend on that).
+    status_rows = [h for h in getattr(ticket, "history", []) if h.field_name == "status"]
+    latest = max(status_rows, key=lambda h: (h.changed_at or 0, h.id), default=None)
+    previous = latest.old_value if latest else None
+    return {
+        "id": ticket.id,
+        "title": ticket.title,
+        "type": ticket.type,
+        "status": ticket.status,
+        "previous_status": previous,
+        "closed_at": ticket.closed_at,
+        "updated_at": ticket.updated_at,
+    }
 
 
 # STOMPY-1432: action classification driving the host's shared-project
@@ -226,16 +263,22 @@ def register_ticketing_tools(
             Optional[str],
             "move/batch_move to status='parked' only: optional ISO date (YYYY-MM-DD) to look again",
         ] = None,
+        fields: Annotated[
+            Optional[Literal["card", "full"]],
+            "list only: 'card' (default) = id/title/type/status/priority/tags/assignee/description_preview; 'full' = whole records incl. description",
+        ] = None,
     ) -> str:
         """Create, update, move, close, search, and batch-manage tickets. Supports glob filter on titles (grep param). Pass project= on every call.
 
+        Payloads: list returns CARDS (no description body; description_preview instead) — get returns the FULL record; move/close return the status change only.
+
         action → required params:
           create      → title (type defaults to task)
-          get         → ticket_id
+          get         → ticket_id (full record: description, history, links)
           update      → ticket_id + fields to change (+ expected_updated_at to refuse stale writes)
           append      → ticket_id + description (ATOMIC append — reports/results; never clobbers concurrent edits)
-          move        → ticket_id + status (status='parked' also needs reason; optional revisit_by)
-          list        → optional filters (type/status/priority/assignee/tags/grep)
+          move        → ticket_id + status (one step; a refusal names the path — close walks it) (status='parked' also needs reason; optional revisit_by)
+          list        → optional filters (type/status/priority/assignee/tags/grep); fields='full' for bodies
           list_tags   → show all unique tags with usage counts (useful before filtering by tags)
           close       → ticket_id
           archive     → (none — global sweep of long-closed tickets; to shelve ONE ticket use move + status='parked')
@@ -409,9 +452,7 @@ def register_ticketing_tools(
                         except Exception:
                             pass  # Email failure should not break the transition
 
-                    return _safe_json(
-                        {"status": "transitioned", "ticket": result.model_dump()}
-                    )
+                    return _safe_json({"status": "transitioned", "ticket": _status_change(result)})
 
                 elif action == "list":
                     effective_limit = min(limit, 200) if limit is not None else 20
@@ -426,7 +467,7 @@ def register_ticketing_tools(
                         offset=effective_offset,
                         include_archived=include_archived,
                     )
-                    result = service.list_tickets(conn, schema, filters)
+                    result = service.list_tickets(conn, schema, filters, fields=fields or "card")
                     if grep and hasattr(result, "tickets"):
                         result.tickets = [
                             t for t in result.tickets
@@ -475,7 +516,7 @@ def register_ticketing_tools(
                     )
                     if not result:
                         return not_found_error("Ticket", ticket_id)
-                    return _safe_json({"status": "closed", "ticket": result.model_dump()})
+                    return _safe_json({"status": "closed", "ticket": _status_change(result)})
 
                 elif action == "batch_move":
                     if not ticket_ids or not status:
@@ -755,10 +796,14 @@ def register_ticketing_tools(
         status: Annotated[Optional[str], "Filter by status"] = None,
         limit: Annotated[int, "Max results"] = 20,
         include_archived: Annotated[bool, "Include archived tickets"] = False,
-        regex: Annotated[str, "Post-filter results by content using Python regex (case-insensitive). E.g. 'conflict.*false', 'MUST.*deploy'"] = "",
+        regex: Annotated[str, "Post-filter the RESULT SET by Python regex (case-insensitive) matched against each hit's title and description body — it narrows which tickets come back, not what each row contains. E.g. 'conflict.*false', 'MUST.*deploy'"] = "",
         project: Annotated[Optional[str], "Project name"] = None,
+        fields: Annotated[
+            Optional[Literal["card", "full"]],
+            "'card' (default) = id/title/type/status/priority/tags/description_preview per hit; 'full' = whole records incl. description",
+        ] = None,
     ) -> str:
-        """Full-text search (BM25) over tickets. Excludes archived by default. Use regex for pattern matching on results."""
+        """Full-text search (BM25) over tickets. Returns CARDS (no description body, a bounded description_preview) — ticket(action='get') has the full record; fields='full' for bodies. Excludes archived by default. regex narrows the result set by title/body match."""
         project_check = check_project_func(project)
         if project_check:
             return project_check
@@ -781,12 +826,16 @@ def register_ticketing_tools(
             fetch_limit = limit * 3 if compiled_regex else limit
             with get_db_func(project, require_write=False) as conn:
                 schema = _get_schema(project_name)
+                want = fields or "card"
+                # regex matches against the BODY, so fetch full rows to
+                # filter on and project to cards afterwards (STOMPY-1923).
                 result = service.search_tickets(
                     conn, schema, query,
                     type_filter=type,
                     status_filter=status,
                     limit=fetch_limit,
                     include_archived=include_archived,
+                    fields="full" if compiled_regex else want,
                 )
                 if compiled_regex and result.tickets:
                     result.tickets = [
@@ -794,6 +843,8 @@ def register_ticketing_tools(
                         if compiled_regex.search(t.title or "") or compiled_regex.search(t.description or "")
                     ][:limit]
                     result.total = len(result.tickets)
+                    if want != "full":
+                        result.tickets = [TicketService.to_card(t) for t in result.tickets]
                 return _safe_json(result)
 
         except Exception as e:
