@@ -146,7 +146,7 @@ class TestSchemaResolution:
             )
 
             ticket_fn = mcp._registered_tools["ticket"]
-            result = asyncio.get_event_loop().run_until_complete(
+            result = asyncio.run(
                 ticket_fn(action="create", title="Test", project="onboarding-test-feb21")
             )
 
@@ -184,7 +184,7 @@ class TestSchemaResolution:
             )
 
             ticket_fn = mcp._registered_tools["ticket"]
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 ticket_fn(action="create", title="Test", project="simple_project")
             )
 
@@ -220,7 +220,7 @@ class TestSchemaResolution:
             )
 
             ticket_fn = mcp._registered_tools["ticket"]
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 ticket_fn(action="list", project="my-project")
             )
 
@@ -257,7 +257,7 @@ class TestSchemaResolution:
             )
 
             board_fn = mcp._registered_tools["ticket_board"]
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 board_fn(project="my-project")
             )
 
@@ -294,7 +294,7 @@ class TestSchemaResolution:
             )
 
             search_fn = mcp._registered_tools["ticket_search"]
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 search_fn(query="test", project="my-project")
             )
 
@@ -329,7 +329,7 @@ class TestSchemaResolution:
             )
 
             link_fn = mcp._registered_tools["ticket_link"]
-            asyncio.get_event_loop().run_until_complete(
+            asyncio.run(
                 link_fn(action="list", ticket_id=1, project="my-project")
             )
 
@@ -368,7 +368,7 @@ class TestUpdateActionRejectsStatus:
         tools = self._register_tools_with_mock_service(mock_svc)
 
         ticket_fn = tools["ticket"]
-        raw = asyncio.get_event_loop().run_until_complete(
+        raw = asyncio.run(
             ticket_fn(action="update", ticket_id=1, status="in_progress")
         )
         data = _parse(raw)
@@ -387,7 +387,7 @@ class TestUpdateActionRejectsStatus:
 
         tools = self._register_tools_with_mock_service(mock_svc)
         ticket_fn = tools["ticket"]
-        raw = asyncio.get_event_loop().run_until_complete(
+        raw = asyncio.run(
             ticket_fn(action="update", ticket_id=1, title="New")
         )
         data = _parse(raw)
@@ -430,7 +430,7 @@ class TestTicketListPagination:
 
         tools = self._register_tools_with_mock_service(mock_svc)
         ticket_fn = tools["ticket"]
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             ticket_fn(action="list")
         )
 
@@ -450,7 +450,7 @@ class TestTicketListPagination:
 
         tools = self._register_tools_with_mock_service(mock_svc)
         ticket_fn = tools["ticket"]
-        asyncio.get_event_loop().run_until_complete(
+        asyncio.run(
             ticket_fn(action="list", limit=10, offset=30)
         )
 
@@ -476,7 +476,7 @@ class TestTicketListPagination:
 
         tools = self._register_tools_with_mock_service(mock_svc)
         ticket_fn = tools["ticket"]
-        raw = asyncio.get_event_loop().run_until_complete(
+        raw = asyncio.run(
             ticket_fn(action="list")
         )
         data = _parse(raw)
@@ -497,7 +497,7 @@ class TestTicketListPagination:
 
         tools = self._register_tools_with_mock_service(mock_svc)
         ticket_fn = tools["ticket"]
-        raw = asyncio.get_event_loop().run_until_complete(
+        raw = asyncio.run(
             ticket_fn(action="list", limit=500)
         )
         data = _parse(raw)

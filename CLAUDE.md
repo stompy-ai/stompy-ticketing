@@ -12,6 +12,7 @@ Self-dogfooding: use Stompy's own ticket tools (`ticket`, `ticket_board`) with `
 - Migrations are CUSTOM entries with `{schema}` placeholders, allocated a fixed ID block starting at 26 (after the host's core migrations) — new plugin migrations must extend the block, never renumber, and must ALSO be wired into the host's `definitions.py` (returning them from `register_plugin` is not enough for project schemas).
 - REST routes mount at `/projects/{name}/tickets`.
 - Ticket refs are dual-format: int | digit-string ("1311", int path) | "PREFIX-123" (case-normalized UPPER). Unknown prefixes and non-int/str garbage raise TicketRefError — see refs.py. display_id decoration is MCP-layer only (contextvar in _safe_json), not part of the service contract.
+- CI (`.github/workflows/ci.yml`, STOMPY-1932) runs pytest on 3.10 + 3.11 in a CLEAN venv; `main` is protected on it. Your local env hides packaging gaps (psycopg2 was undeclared until 0.8.3) and test-order bugs (drive coroutines with `asyncio.run`, never `get_event_loop()`), so a local green is not the gate.
 - This package is pinned by exact git hash in dementia-production's `requirements.txt`; DO's pip cache ignores `@main` — every deployable change needs a version bump in `pyproject.toml` AND a new pinned hash in the host repo.
 
 ## Immutable test rules
