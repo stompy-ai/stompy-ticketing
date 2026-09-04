@@ -139,4 +139,5 @@ class TestReaderSeesDisplayNames:
         service.get_ticket.return_value = _ticket(created_by="51")
         out = asyncio.run(tool(action="get", ticket_id=7, project="proj"))
         assert ("created_by: 51" in out or 'created_by: "51"' in out)  # TOON quotes digits
-        assert "created_by_display: null" in out
+        # STOMPY-1908: a null display name is omitted, not rendered — the raw id stands alone
+        assert "created_by_display" not in out

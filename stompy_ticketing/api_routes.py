@@ -125,8 +125,10 @@ async def search_tickets(
     ticket_status: Optional[str] = Query(None, alias="status"),
     limit: int = Query(20, ge=1, le=100),
     include_archived: bool = Query(False),
+    fields: str = Query("card", pattern="^(card|full)$"),
 ):
-    """Full-text search tickets."""
+    """Full-text search tickets. Rows are cards (no description body, a
+    bounded description_preview) unless fields=full (STOMPY-1923)."""
     _require_db()
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=False) as conn:
@@ -136,6 +138,7 @@ async def search_tickets(
             status_filter=ticket_status,
             limit=limit,
             include_archived=include_archived,
+            fields=fields,
         )
 
 
