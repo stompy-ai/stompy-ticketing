@@ -10,6 +10,7 @@ import hashlib
 import json
 import re
 import time
+from datetime import date
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 from psycopg2 import IntegrityError, sql
@@ -58,47 +59,67 @@ class LinkAlreadyExistsError(ValueError):
     pass
 
 
+# PARKED (STOMPY-1746): "deliberately not now". Reachable from every
+# pre-work status of every type and reopenable to those same statuses in
+# ONE step. Deliberately NOT terminal — closed_at stays NULL and the stale
+# sweep never archives it — but board views hide it with the terminals so
+# the queue stays a queue. Entering it requires a reason (transition_ticket).
+PARKED = "parked"
+
+
+class ParkArgumentError(InvalidTransitionError):
+    """Parking was asked for without a reason, or with an unparseable
+    revisit_by. Subclasses InvalidTransitionError so the REST door's
+    existing 422 mapping applies; the MCP door maps it to PARK_ARGUMENT."""
+
+    pass
+
+
 # Each type maps to: initial status, terminal statuses, and allowed transitions
 STATE_MACHINES: Dict[str, Dict[str, Any]] = {
     "task": {
         "initial": "backlog",
         "terminal": ["done", "cancelled"],
         "transitions": {
-            "backlog": ["in_progress", "done", "cancelled"],
+            "backlog": ["in_progress", "done", "cancelled", PARKED],
             "in_progress": ["done", "cancelled"],
             "done": ["backlog"],
             "cancelled": ["backlog"],
+            PARKED: ["backlog"],
         },
     },
     "bug": {
         "initial": "triage",
         "terminal": ["resolved", "wont_fix"],
         "transitions": {
-            "triage": ["confirmed", "wont_fix"],
-            "confirmed": ["in_progress"],
+            "triage": ["confirmed", "wont_fix", PARKED],
+            "confirmed": ["in_progress", PARKED],
             "in_progress": ["resolved", "wont_fix"],
             "resolved": ["triage"],
             "wont_fix": ["triage"],
+            PARKED: ["triage", "confirmed"],
         },
     },
     "feature": {
         "initial": "proposed",
         "terminal": ["shipped", "rejected"],
         "transitions": {
-            "proposed": ["approved", "rejected"],
-            "approved": ["in_progress"],
+            "proposed": ["approved", "rejected", PARKED],
+            "approved": ["in_progress", PARKED],
             "in_progress": ["shipped", "rejected"],
             "shipped": ["proposed"],
             "rejected": ["proposed"],
+            PARKED: ["proposed", "approved"],
         },
     },
     "decision": {
         "initial": "open",
         "terminal": ["decided", "deferred"],
         "transitions": {
-            "open": ["decided", "deferred"],
+            "open": ["decided", "deferred", PARKED],
             "decided": ["open"],
             "deferred": ["open"],  # Deferred decisions can be reopened
+            PARKED: ["open"],
         },
     },
 }
@@ -140,6 +161,86 @@ def get_all_terminal_statuses() -> List[str]:
     for sm in STATE_MACHINES.values():
         terminals.update(sm["terminal"])
     return sorted(terminals)
+
+
+def get_hidden_statuses(ticket_type: Optional[str] = None) -> List[str]:
+    """Statuses a default board/queue view hides: the terminals plus PARKED.
+
+    Per type when given (and known), else across all types. Parked is not
+    terminal, but a parked ticket is not queue either (STOMPY-1746)."""
+    if ticket_type and ticket_type in STATE_MACHINES:
+        hidden = set(get_terminal_statuses(ticket_type))
+    else:
+        hidden = set(get_all_terminal_statuses())
+    hidden.add(PARKED)
+    return sorted(hidden)
+
+
+PARK_REASON_MAX = 2000
+
+
+def _validate_park_args(
+    target_status: str, reason: Optional[str], revisit_by: Optional[str]
+) -> None:
+    """Refuse a park without a reason, a bad revisit_by, or park-only args
+    on a non-park move (a silently dropped argument is the STOMPY-1364
+    shape this feature exists to end)."""
+    if target_status != PARKED:
+        if reason is not None or revisit_by is not None:
+            raise ParkArgumentError(
+                "reason/revisit_by only apply to status='parked'; "
+                f"drop them for a move to '{target_status}'"
+            )
+        return
+    if not isinstance(reason, str) or not reason.strip():
+        raise ParkArgumentError(
+            "Parking requires a reason: pass reason='why this is not now'"
+        )
+    if len(reason) > PARK_REASON_MAX:
+        raise ParkArgumentError(
+            f"reason is {len(reason)} chars; max {PARK_REASON_MAX} — put the essay on the ticket"
+        )
+    if revisit_by is not None:
+        try:
+            date.fromisoformat(revisit_by)
+        except (ValueError, TypeError):
+            raise ParkArgumentError(
+                f"revisit_by must be an ISO date (YYYY-MM-DD), got {revisit_by!r}"
+            )
+
+
+def _park_metadata(
+    current_metadata: Optional[str],
+    current_status: str,
+    target_status: str,
+    reason: Optional[str],
+    revisit_by: Optional[str],
+    now: float,
+) -> Optional[str]:
+    """Serialized metadata to write for a park/reopen, or None to leave the
+    column untouched. The `metadata.parked` contract (the web board reads
+    it): {reason, revisit_by (ISO date or null), parked_at (epoch),
+    from_status}; present only while status == parked."""
+    _validate_park_args(target_status, reason, revisit_by)
+    if target_status != PARKED and current_status != PARKED:
+        return None
+    meta: Dict[str, Any] = {}
+    if current_metadata:
+        try:
+            meta = json.loads(current_metadata) or {}
+        except (json.JSONDecodeError, TypeError):
+            # Unreadable already; keep the bytes rather than destroy evidence.
+            meta = {"_unparseable_metadata": str(current_metadata)}
+    if target_status == PARKED:
+        meta["parked"] = {
+            "reason": reason.strip(),
+            "revisit_by": revisit_by,
+            "parked_at": now,
+            "from_status": current_status,
+        }
+    else:
+        meta.pop("parked", None)
+    return json.dumps(meta)
 
 
 def validate_transition(
@@ -554,6 +655,8 @@ class TicketService:
         ticket_id: int,
         target_status: str,
         changed_by: Optional[str] = None,
+        reason: Optional[str] = None,
+        revisit_by: Optional[str] = None,
     ) -> Optional[TicketResponse]:
         """Transition a ticket to a new status via the state machine.
 
@@ -563,12 +666,15 @@ class TicketService:
             ticket_id: Ticket ID.
             target_status: Target status.
             changed_by: Who made the change.
+            reason: REQUIRED when target_status is PARKED; ignored otherwise.
+            revisit_by: Optional ISO date (YYYY-MM-DD) for a park.
 
         Returns:
             Updated ticket or None if not found.
 
         Raises:
             InvalidTransitionError: If transition is not allowed.
+            ParkArgumentError: Park without a reason / bad revisit_by.
         """
         cur = conn.cursor()
         try:
@@ -590,27 +696,44 @@ class TicketService:
 
             now = time.time()
             closed_at = now if target_status in get_terminal_statuses(ticket_type) else None
+            # None = leave metadata alone; a string = park/reopen rewrote it.
+            metadata_text = _park_metadata(
+                current.get("metadata"), current_status, target_status, reason, revisit_by, now
+            )
 
+            set_sql = "status = %s, updated_at = %s, closed_at = %s"
+            params: List[Any] = [target_status, now, closed_at]
+            if metadata_text is not None:
+                set_sql += ", metadata = %s"
+                params.append(metadata_text)
             cur.execute(
                 sql.SQL("""
                 UPDATE {}.tickets
-                SET status = %s, updated_at = %s, closed_at = %s
+                SET {}
                 WHERE id = %s
                 RETURNING *
-                """).format(sql.Identifier(schema)),
-                (target_status, now, closed_at, ticket_id),
+                """).format(sql.Identifier(schema), sql.SQL(set_sql)),
+                tuple(params) + (ticket_id,),
             )
             updated_row = cur.fetchone()
 
             # Record history
-            cur.execute(
-                sql.SQL("""
+            history_sql = sql.SQL("""
                 INSERT INTO {}.ticket_history
                     (ticket_id, field_name, old_value, new_value, changed_by, changed_at)
                 VALUES (%s, %s, %s, %s, %s, %s)
-                """).format(sql.Identifier(schema)),
+                """).format(sql.Identifier(schema))
+            cur.execute(
+                history_sql,
                 (ticket_id, "status", current_status, target_status, changed_by, now),
             )
+            if target_status == PARKED:
+                # The reason outlives the park: metadata.parked is cleared on
+                # reopen, history keeps why it was shelved.
+                cur.execute(
+                    history_sql,
+                    (ticket_id, "parked_reason", None, reason.strip(), changed_by, now),
+                )
 
             conn.commit()
             response = self._row_to_response(updated_row)
@@ -1160,15 +1283,12 @@ class TicketService:
             conditions.append("status = %s")
             params.append(status_filter)
         elif not include_terminal:
-            # Exclude terminal statuses
-            if type_filter and type_filter in STATE_MACHINES:
-                terminals = get_terminal_statuses(type_filter)
-            else:
-                terminals = get_all_terminal_statuses()
-            if terminals:
-                placeholders = ", ".join(["%s"] * len(terminals))
-                conditions.append(f"status NOT IN ({placeholders})")
-                params.extend(terminals)
+            # Exclude terminal statuses AND parked (STOMPY-1746): neither is
+            # queue. include_terminal=True shows both.
+            hidden = get_hidden_statuses(type_filter)
+            placeholders = ", ".join(["%s"] * len(hidden))
+            conditions.append(f"status NOT IN ({placeholders})")
+            params.extend(hidden)
 
         where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
 
@@ -1388,6 +1508,8 @@ class TicketService:
         target_status: str,
         confirm: bool = False,
         changed_by: Optional[str] = None,
+        reason: Optional[str] = None,
+        revisit_by: Optional[str] = None,
     ) -> BatchOperationResult:
         """Move multiple tickets to a target status.
 
@@ -1400,6 +1522,8 @@ class TicketService:
             target_status: Target status for all tickets.
             confirm: If False (default), dry-run preview. If True, execute.
             changed_by: Who made the change.
+            reason: One reason for the whole batch; REQUIRED for PARKED.
+            revisit_by: Optional ISO date for a park.
 
         Returns:
             BatchOperationResult with per-ticket results.
@@ -1416,6 +1540,23 @@ class TicketService:
                 )],
                 dry_run=not confirm,
             )
+        if target_status == PARKED or reason is not None or revisit_by is not None:
+            # Fail the whole batch up front rather than N identical per-row
+            # refusals after N SELECTs.
+            try:
+                _validate_park_args(target_status, reason, revisit_by)
+            except ParkArgumentError as e:
+                return BatchOperationResult(
+                    action="batch_move",
+                    total=len(ticket_ids),
+                    succeeded=0,
+                    failed=len(ticket_ids),
+                    results=[
+                        BatchItemResult(ticket_id=tid, success=False, error=str(e))
+                        for tid in ticket_ids
+                    ],
+                    dry_run=not confirm,
+                )
 
         results: List[BatchItemResult] = []
         succeeded = 0
@@ -1455,7 +1596,10 @@ class TicketService:
 
             if confirm:
                 try:
-                    self.transition_ticket(conn, schema, tid, target_status, changed_by)
+                    self.transition_ticket(
+                        conn, schema, tid, target_status, changed_by,
+                        reason=reason, revisit_by=revisit_by,
+                    )
                     results.append(BatchItemResult(
                         ticket_id=tid, success=True,
                         old_status=old_status, new_status=target_status,
