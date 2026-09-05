@@ -280,7 +280,8 @@ def register_ticketing_tools(
         tags: Annotated[Optional[str], "Comma-separated tags"] = None,
         ticket_id: Annotated[
             Optional[Union[int, str]],
-            "Ticket ID (get/update/move/close): numeric (1311) or prefixed (STOMPY-1311)",
+            "Ticket ID (get/update/move/close): numeric (1311), prefixed "
+            "(STOMPY-1311), or the full ticket URL a human was sent",
         ] = None,
         ticket_ids: Annotated[
             Optional[str],
