@@ -59,12 +59,13 @@ _display_prefix: contextvars.ContextVar = contextvars.ContextVar("_display_prefi
 # address (STOMPY-1929). Request-scoped for the same reason as the prefix.
 _url_project: contextvars.ContextVar = contextvars.ContextVar("_url_project", default=None)
 
-# Builds a ticket's canonical URL: (project, display_id_or_id) -> str | None.
-# INJECTED BY THE HOST at registration (src/services/object_urls.ticket_url),
-# so the URL grammar has exactly one implementation and the REST door and this
-# one cannot drift (STOMPY-1927). A host that predates 1929 injects nothing and
-# payloads simply carry no url, as before.
-_ticket_url_func: Optional[Callable] = None
+# Addresses a whole payload: (payload, project) -> payload, mutated in place.
+# INJECTED BY THE HOST at registration (src/services/object_urls.stamp_urls),
+# so BOTH the URL grammar and the shape rule — a per-object `url`, but ONE
+# `url_template` on a list of cards (STOMPY-1925) — have exactly one
+# implementation, shared with the REST door (STOMPY-1927). A host that predates
+# 1929 injects nothing and payloads are unchanged.
+_stamp_urls_func: Optional[Callable] = None
 
 
 def _bind_display(project_name, prefix):
@@ -79,31 +80,31 @@ def _unbind_display(token) -> None:
     _url_project.reset(project_token)
 
 
-def _ticket_url(project, ref) -> Optional[str]:
-    """The host's builder, or None. Never raises into a response."""
-    if not _ticket_url_func or not project:
-        return None
+def _stamp_urls(data: Any) -> Any:
+    """Hand the payload to the host's stamper. Never raises into a response."""
+    project = _url_project.get()
+    if not _stamp_urls_func or not project:
+        return data
     try:
-        return _ticket_url_func(project, ref)
+        return _stamp_urls_func(data, project)
     except Exception:
-        return None
+        return data
 
 
-def _decorate_display_ids(obj: Any, prefix, project=None) -> Any:
-    """Recursively add display_id — and the ticket's canonical url
-    (STOMPY-1929) — to anything that looks like a ticket dict."""
+def _decorate_display_ids(obj: Any, prefix) -> Any:
+    """Recursively add display_id to anything that looks like a ticket dict.
+
+    Runs BEFORE the host's stamper (STOMPY-1929) so a card already carries the
+    display_id its address is built from.
+    """
     if isinstance(obj, dict):
         if isinstance(obj.get("id"), int) and "title" in obj and "status" in obj:
             obj.setdefault("display_id", format_display_id(prefix, obj["id"]))
-            if "url" not in obj:
-                url = _ticket_url(project, obj["display_id"])
-                if url:
-                    obj["url"] = url
         for v in obj.values():
-            _decorate_display_ids(v, prefix, project)
+            _decorate_display_ids(v, prefix)
     elif isinstance(obj, list):
         for v in obj:
-            _decorate_display_ids(v, prefix, project)
+            _decorate_display_ids(v, prefix)
     return obj
 
 
@@ -123,7 +124,8 @@ def _safe_json(data: Any) -> str:
             data = data.dict()
         _prefix = _display_prefix.get()
         if _prefix:
-            data = _decorate_display_ids(data, _prefix, _url_project.get())
+            data = _decorate_display_ids(data, _prefix)
+        data = _stamp_urls(data)
         return _toon_encode(_omit_empty(data))
     except Exception as e:
         return json.dumps({"error": str(e)})
@@ -195,7 +197,7 @@ def register_ticketing_tools(
     get_prefix_func: Optional[Callable] = None,
     actor_func: Optional[Callable] = None,
     display_actors_func: Optional[Callable] = None,
-    ticket_url_func: Optional[Callable] = None,
+    stamp_urls_func: Optional[Callable] = None,
 ) -> None:
     """Register ticketing MCP tools on the given FastMCP instance.
 
@@ -218,13 +220,14 @@ def register_ticketing_tools(
             uses the project name directly as the schema.
         notify_resolution_func: Optional callback(report, new_status) for bug
             resolution emails on mcp_global tickets.
-        ticket_url_func: Optional function(project, display_id) -> canonical
-            ticket URL (STOMPY-1929). The host owns the URL grammar; omitting
-            it leaves payloads without a url, exactly as before.
+        stamp_urls_func: Optional function(payload, project) -> payload that
+            adds each object's canonical url, or one url_template to a list of
+            cards (STOMPY-1929/1925). The host owns both the grammar and the
+            shape rule; omitting it leaves payloads unchanged.
     """
-    global _ticket_url_func
-    if ticket_url_func is not None:
-        _ticket_url_func = ticket_url_func
+    global _stamp_urls_func
+    if stamp_urls_func is not None:
+        _stamp_urls_func = stamp_urls_func
 
     service = TicketService()
 

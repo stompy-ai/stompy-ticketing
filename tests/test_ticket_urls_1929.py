@@ -1,12 +1,13 @@
 """STOMPY-1929 — a ticket carries the address a human can click.
 
-The URL GRAMMAR itself lives in the host (src/services/object_urls.py) and is
-injected as ``ticket_url_func`` at registration, so the MCP door and the REST
-door build the same string from one implementation (STOMPY-1927). This module
-owns only the plumbing: bind the project for the call, stamp the rows, and
-accept a full URL wherever a ticket reference is accepted.
+Both the URL GRAMMAR and the SHAPE RULE (a per-object `url`, but ONE
+`url_template` on a list of cards — STOMPY-1925) live in the host
+(src/services/object_urls.stamp_urls) and are injected as ``stamp_urls_func``
+at registration, so the MCP door and the REST door cannot drift (STOMPY-1927).
+This module owns only the plumbing: bind the project for the call, hand the
+payload over, and accept a full URL wherever a ticket reference is accepted.
 
-RED without the 1929 commit: `_bind_display` and `ticket_url_func` do not
+RED without the 1929 commit: `_bind_display` and `stamp_urls_func` do not
 exist, and `coerce_ticket_ref` raises TicketRefError on a URL.
 """
 
@@ -22,56 +23,62 @@ def _url(project, ref):
     return f"{BASE}/dashboard/projects/{project}/tickets/{ref}"
 
 
+def _fake_stamp(payload, project):
+    """Stand-in for the host's stamp_urls: object -> url, list -> template.
+    The REAL rule is tested in the host repo; this pins the WIRING."""
+    if isinstance(payload, dict):
+        rows = payload.get("tickets")
+        if isinstance(rows, list) and rows:
+            payload["url_template"] = f"{BASE}/dashboard/projects/{project}/tickets/{{display_id}}"
+        elif isinstance(payload.get("id"), int) and "title" in payload:
+            payload["url"] = _url(project, payload.get("display_id") or payload["id"])
+    return payload
+
+
 @pytest.fixture
 def bound(monkeypatch):
-    """Bind a call the way each tool does, with a host-injected builder."""
-    monkeypatch.setattr(mcp_tools, "_ticket_url_func", _url)
+    """Bind a call the way each tool does, with the host stamper injected."""
+    monkeypatch.setattr(mcp_tools, "_stamp_urls_func", _fake_stamp)
     token = mcp_tools._bind_display("stompy", "STOMPY")
     yield
     mcp_tools._unbind_display(token)
 
 
-class TestUrlOnMcpTicketPayloads:
-    def test_ticket_row_gains_a_url(self, bound):
+class TestPayloadsGoThroughTheHostStamper:
+    def test_a_single_ticket_is_addressed(self, bound):
         out = mcp_tools._safe_json({"id": 1929, "title": "t", "status": "in_progress"})
         assert _url("stompy", "STOMPY-1929") in out
 
-    def test_url_uses_the_display_id(self, bound):
+    def test_display_id_is_stamped_before_the_url_is_built(self, bound):
+        """Ordering matters: the address is built FROM display_id."""
         row = {"id": 1929, "title": "t", "status": "open"}
-        mcp_tools._decorate_display_ids(row, "STOMPY", "stompy")
-        assert row["display_id"] == "STOMPY-1929"
-        assert row["url"].endswith("/tickets/STOMPY-1929")
+        out = mcp_tools._safe_json(row)
+        assert "STOMPY-1929" in out and "/tickets/STOMPY-1929" in out
 
-    def test_nested_board_columns(self, bound):
-        payload = {"columns": [{"status": "open", "tickets": [{"id": 1, "title": "a", "status": "open"}]}]}
-        mcp_tools._decorate_display_ids(payload, "STOMPY", "stompy")
-        assert payload["columns"][0]["tickets"][0]["url"].endswith("/tickets/STOMPY-1")
+    def test_a_card_list_gets_the_template_the_host_chose(self, bound):
+        payload = {"tickets": [{"id": i, "title": "a", "status": "open"} for i in (1, 2)], "total": 2}
+        out = mcp_tools._safe_json(payload)
+        assert "/tickets/{display_id}" in out
 
-    def test_no_builder_no_url(self, monkeypatch):
-        """A host that predates 1929 injects nothing — the payload is unchanged."""
-        monkeypatch.setattr(mcp_tools, "_ticket_url_func", None)
+    def test_no_stamper_no_addresses(self, monkeypatch):
+        """A host that predates 1929 injects nothing — payloads are unchanged."""
+        monkeypatch.setattr(mcp_tools, "_stamp_urls_func", None)
         token = mcp_tools._bind_display("stompy", "STOMPY")
         try:
-            row = {"id": 1, "title": "t", "status": "open"}
-            mcp_tools._decorate_display_ids(row, "STOMPY", "stompy")
-            assert "url" not in row
-            assert row["display_id"] == "STOMPY-1"
+            out = mcp_tools._safe_json({"id": 1, "title": "t", "status": "open"})
+            assert "dashboard/projects" not in out
+            assert "STOMPY-1" in out
         finally:
             mcp_tools._unbind_display(token)
 
     def test_unbound_calls_emit_nothing(self, monkeypatch):
-        monkeypatch.setattr(mcp_tools, "_ticket_url_func", _url)
+        monkeypatch.setattr(mcp_tools, "_stamp_urls_func", _fake_stamp)
         out = mcp_tools._safe_json({"id": 1, "title": "t", "status": "open"})
         assert "dashboard/projects" not in out
 
-    def test_existing_url_is_not_overwritten(self, bound):
-        row = {"id": 1, "title": "t", "status": "open", "url": "https://elsewhere/x"}
-        mcp_tools._decorate_display_ids(row, "STOMPY", "stompy")
-        assert row["url"] == "https://elsewhere/x"
-
-    def test_builder_failure_never_breaks_a_response(self, monkeypatch, bound):
+    def test_stamper_failure_never_breaks_a_response(self, monkeypatch, bound):
         monkeypatch.setattr(
-            mcp_tools, "_ticket_url_func", lambda *a: (_ for _ in ()).throw(RuntimeError("boom"))
+            mcp_tools, "_stamp_urls_func", lambda *a: (_ for _ in ()).throw(RuntimeError("boom"))
         )
         out = mcp_tools._safe_json({"id": 1, "title": "t", "status": "open"})
         assert "STOMPY-1" in out

@@ -28,7 +28,7 @@ def register_plugin(
     get_prefix_func: Optional[Callable] = None,
     actor_func: Optional[Callable] = None,
     display_actors_func: Optional[Callable] = None,
-    ticket_url_func: Optional[Callable] = None,
+    stamp_urls_func: Optional[Callable] = None,
 ) -> Dict[str, Any]:
     """One-call plugin registration.
 
@@ -48,8 +48,8 @@ def register_plugin(
             resolution emails on mcp_global tickets.
         cache_invalidator_func: Optional function(project) called after ticket
             writes to invalidate REST response caches. Falls back to no-op.
-        ticket_url_func: Optional function(project, display_id) -> a ticket's
-            canonical URL (STOMPY-1929); the host owns the grammar.
+        stamp_urls_func: Optional function(payload, project) that addresses a
+            payload (STOMPY-1929); the host owns the grammar and shape rule.
 
     Returns:
         Dict with:
@@ -68,7 +68,7 @@ def register_plugin(
         get_prefix_func=get_prefix_func,
         actor_func=actor_func,
         display_actors_func=display_actors_func,
-        ticket_url_func=ticket_url_func,
+        stamp_urls_func=stamp_urls_func,
     )
     logger.info("stompy_ticketing: MCP tools registered (4 tools)")
 
