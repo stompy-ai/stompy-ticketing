@@ -18,7 +18,9 @@ from stompy_ticketing.schema import (
     get_ticket_links_table_sql,
 )
 
-__version__ = "0.5.3"
+# Kept in step with pyproject.toml by hand; it had drifted to 0.5.3 while
+# the package shipped 0.8.4 (STOMPY-1929).
+__version__ = "0.8.5"
 
 __all__ = [
     "TicketService",

@@ -55,10 +55,48 @@ def _toon_encode(data):
 # resolution; consumed by _safe_json so every response gains display_id
 # without touching 20 call sites.
 _display_prefix: contextvars.ContextVar = contextvars.ContextVar("_display_prefix", default=None)
+# The project the current tool call is about — the other half of a ticket's
+# address (STOMPY-1929). Request-scoped for the same reason as the prefix.
+_url_project: contextvars.ContextVar = contextvars.ContextVar("_url_project", default=None)
+
+# Addresses a whole payload: (payload, project) -> payload, mutated in place.
+# INJECTED BY THE HOST at registration (src/services/object_urls.stamp_urls),
+# so BOTH the URL grammar and the shape rule — a per-object `url`, but ONE
+# `url_template` on a list of cards (STOMPY-1925) — have exactly one
+# implementation, shared with the REST door (STOMPY-1927). A host that predates
+# 1929 injects nothing and payloads are unchanged.
+_stamp_urls_func: Optional[Callable] = None
+
+
+def _bind_display(project_name, prefix):
+    """Bind the display prefix and project for ONE tool call. Returns the token
+    pair to hand back to ``_unbind_display`` in the caller's finally block."""
+    return (_display_prefix.set(prefix), _url_project.set(project_name))
+
+
+def _unbind_display(token) -> None:
+    prefix_token, project_token = token
+    _display_prefix.reset(prefix_token)
+    _url_project.reset(project_token)
+
+
+def _stamp_urls(data: Any) -> Any:
+    """Hand the payload to the host's stamper. Never raises into a response."""
+    project = _url_project.get()
+    if not _stamp_urls_func or not project:
+        return data
+    try:
+        return _stamp_urls_func(data, project)
+    except Exception:
+        return data
 
 
 def _decorate_display_ids(obj: Any, prefix) -> Any:
-    """Recursively add display_id to anything that looks like a ticket dict."""
+    """Recursively add display_id to anything that looks like a ticket dict.
+
+    Runs BEFORE the host's stamper (STOMPY-1929) so a card already carries the
+    display_id its address is built from.
+    """
     if isinstance(obj, dict):
         if isinstance(obj.get("id"), int) and "title" in obj and "status" in obj:
             obj.setdefault("display_id", format_display_id(prefix, obj["id"]))
@@ -87,6 +125,7 @@ def _safe_json(data: Any) -> str:
         _prefix = _display_prefix.get()
         if _prefix:
             data = _decorate_display_ids(data, _prefix)
+        data = _stamp_urls(data)
         return _toon_encode(_omit_empty(data))
     except Exception as e:
         return json.dumps({"error": str(e)})
@@ -158,6 +197,7 @@ def register_ticketing_tools(
     get_prefix_func: Optional[Callable] = None,
     actor_func: Optional[Callable] = None,
     display_actors_func: Optional[Callable] = None,
+    stamp_urls_func: Optional[Callable] = None,
 ) -> None:
     """Register ticketing MCP tools on the given FastMCP instance.
 
@@ -180,7 +220,15 @@ def register_ticketing_tools(
             uses the project name directly as the schema.
         notify_resolution_func: Optional callback(report, new_status) for bug
             resolution emails on mcp_global tickets.
+        stamp_urls_func: Optional function(payload, project) -> payload that
+            adds each object's canonical url, or one url_template to a list of
+            cards (STOMPY-1929/1925). The host owns both the grammar and the
+            shape rule; omitting it leaves payloads unchanged.
     """
+    global _stamp_urls_func
+    if stamp_urls_func is not None:
+        _stamp_urls_func = stamp_urls_func
+
     service = TicketService()
 
     def _actor() -> Optional[str]:
@@ -333,8 +381,8 @@ def register_ticketing_tools(
                 return project_check
 
             project_name = get_project_func(project)
-            _prefix_token = _display_prefix.set(
-                get_prefix_func(project_name) if get_prefix_func else None
+            _prefix_token = _bind_display(
+                project_name, get_prefix_func(project_name) if get_prefix_func else None
             )
             with get_db_func(
                 project, require_write=action not in TICKET_READ_ACTIONS
@@ -580,7 +628,7 @@ def register_ticketing_tools(
             )
         finally:
             if _prefix_token is not None:
-                _display_prefix.reset(_prefix_token)
+                _unbind_display(_prefix_token)
 
     @mcp_instance.tool()
     async def ticket_link(
@@ -643,8 +691,8 @@ def register_ticketing_tools(
 
         try:
             project_name = get_project_func(project)
-            _lk_prefix_token = _display_prefix.set(
-                get_prefix_func(project_name) if get_prefix_func else None
+            _lk_prefix_token = _bind_display(
+                project_name, get_prefix_func(project_name) if get_prefix_func else None
             )
             with get_db_func(
                 project, require_write=action not in TICKET_LINK_READ_ACTIONS
@@ -725,7 +773,7 @@ def register_ticketing_tools(
             )
         finally:
             if _lk_prefix_token is not None:
-                _display_prefix.reset(_lk_prefix_token)
+                _unbind_display(_lk_prefix_token)
 
     @mcp_instance.tool()
     async def ticket_board(
@@ -751,7 +799,9 @@ def register_ticketing_tools(
         _bd_tok = None
         try:
             project_name = get_project_func(project)
-            _bd_tok = _display_prefix.set(get_prefix_func(project_name) if get_prefix_func else None)
+            _bd_tok = _bind_display(
+                project_name, get_prefix_func(project_name) if get_prefix_func else None
+            )
             # One retry on Neon idle-conn drop (SSL connection closed).
             # Context manager is re-entered to obtain a fresh connection.
             last_op_error: Optional[Exception] = None
@@ -784,7 +834,7 @@ def register_ticketing_tools(
             )
         finally:
             if _bd_tok is not None:
-                _display_prefix.reset(_bd_tok)
+                _unbind_display(_bd_tok)
 
     @mcp_instance.tool()
     async def ticket_search(
@@ -822,7 +872,9 @@ def register_ticketing_tools(
         _sr_tok = None
         try:
             project_name = get_project_func(project)
-            _sr_tok = _display_prefix.set(get_prefix_func(project_name) if get_prefix_func else None)
+            _sr_tok = _bind_display(
+                project_name, get_prefix_func(project_name) if get_prefix_func else None
+            )
             fetch_limit = limit * 3 if compiled_regex else limit
             with get_db_func(project, require_write=False) as conn:
                 schema = _get_schema(project_name)
@@ -853,4 +905,4 @@ def register_ticketing_tools(
             )
         finally:
             if _sr_tok is not None:
-                _display_prefix.reset(_sr_tok)
+                _unbind_display(_sr_tok)
