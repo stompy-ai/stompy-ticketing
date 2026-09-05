@@ -55,18 +55,55 @@ def _toon_encode(data):
 # resolution; consumed by _safe_json so every response gains display_id
 # without touching 20 call sites.
 _display_prefix: contextvars.ContextVar = contextvars.ContextVar("_display_prefix", default=None)
+# The project the current tool call is about — the other half of a ticket's
+# address (STOMPY-1929). Request-scoped for the same reason as the prefix.
+_url_project: contextvars.ContextVar = contextvars.ContextVar("_url_project", default=None)
+
+# Builds a ticket's canonical URL: (project, display_id_or_id) -> str | None.
+# INJECTED BY THE HOST at registration (src/services/object_urls.ticket_url),
+# so the URL grammar has exactly one implementation and the REST door and this
+# one cannot drift (STOMPY-1927). A host that predates 1929 injects nothing and
+# payloads simply carry no url, as before.
+_ticket_url_func: Optional[Callable] = None
 
 
-def _decorate_display_ids(obj: Any, prefix) -> Any:
-    """Recursively add display_id to anything that looks like a ticket dict."""
+def _bind_display(project_name, prefix):
+    """Bind the display prefix and project for ONE tool call. Returns the token
+    pair to hand back to ``_unbind_display`` in the caller's finally block."""
+    return (_display_prefix.set(prefix), _url_project.set(project_name))
+
+
+def _unbind_display(token) -> None:
+    prefix_token, project_token = token
+    _display_prefix.reset(prefix_token)
+    _url_project.reset(project_token)
+
+
+def _ticket_url(project, ref) -> Optional[str]:
+    """The host's builder, or None. Never raises into a response."""
+    if not _ticket_url_func or not project:
+        return None
+    try:
+        return _ticket_url_func(project, ref)
+    except Exception:
+        return None
+
+
+def _decorate_display_ids(obj: Any, prefix, project=None) -> Any:
+    """Recursively add display_id — and the ticket's canonical url
+    (STOMPY-1929) — to anything that looks like a ticket dict."""
     if isinstance(obj, dict):
         if isinstance(obj.get("id"), int) and "title" in obj and "status" in obj:
             obj.setdefault("display_id", format_display_id(prefix, obj["id"]))
+            if "url" not in obj:
+                url = _ticket_url(project, obj["display_id"])
+                if url:
+                    obj["url"] = url
         for v in obj.values():
-            _decorate_display_ids(v, prefix)
+            _decorate_display_ids(v, prefix, project)
     elif isinstance(obj, list):
         for v in obj:
-            _decorate_display_ids(v, prefix)
+            _decorate_display_ids(v, prefix, project)
     return obj
 
 
@@ -86,7 +123,7 @@ def _safe_json(data: Any) -> str:
             data = data.dict()
         _prefix = _display_prefix.get()
         if _prefix:
-            data = _decorate_display_ids(data, _prefix)
+            data = _decorate_display_ids(data, _prefix, _url_project.get())
         return _toon_encode(_omit_empty(data))
     except Exception as e:
         return json.dumps({"error": str(e)})
@@ -158,6 +195,7 @@ def register_ticketing_tools(
     get_prefix_func: Optional[Callable] = None,
     actor_func: Optional[Callable] = None,
     display_actors_func: Optional[Callable] = None,
+    ticket_url_func: Optional[Callable] = None,
 ) -> None:
     """Register ticketing MCP tools on the given FastMCP instance.
 
@@ -180,7 +218,14 @@ def register_ticketing_tools(
             uses the project name directly as the schema.
         notify_resolution_func: Optional callback(report, new_status) for bug
             resolution emails on mcp_global tickets.
+        ticket_url_func: Optional function(project, display_id) -> canonical
+            ticket URL (STOMPY-1929). The host owns the URL grammar; omitting
+            it leaves payloads without a url, exactly as before.
     """
+    global _ticket_url_func
+    if ticket_url_func is not None:
+        _ticket_url_func = ticket_url_func
+
     service = TicketService()
 
     def _actor() -> Optional[str]:
@@ -333,8 +378,8 @@ def register_ticketing_tools(
                 return project_check
 
             project_name = get_project_func(project)
-            _prefix_token = _display_prefix.set(
-                get_prefix_func(project_name) if get_prefix_func else None
+            _prefix_token = _bind_display(
+                project_name, get_prefix_func(project_name) if get_prefix_func else None
             )
             with get_db_func(
                 project, require_write=action not in TICKET_READ_ACTIONS
@@ -580,7 +625,7 @@ def register_ticketing_tools(
             )
         finally:
             if _prefix_token is not None:
-                _display_prefix.reset(_prefix_token)
+                _unbind_display(_prefix_token)
 
     @mcp_instance.tool()
     async def ticket_link(
@@ -643,8 +688,8 @@ def register_ticketing_tools(
 
         try:
             project_name = get_project_func(project)
-            _lk_prefix_token = _display_prefix.set(
-                get_prefix_func(project_name) if get_prefix_func else None
+            _lk_prefix_token = _bind_display(
+                project_name, get_prefix_func(project_name) if get_prefix_func else None
             )
             with get_db_func(
                 project, require_write=action not in TICKET_LINK_READ_ACTIONS
@@ -725,7 +770,7 @@ def register_ticketing_tools(
             )
         finally:
             if _lk_prefix_token is not None:
-                _display_prefix.reset(_lk_prefix_token)
+                _unbind_display(_lk_prefix_token)
 
     @mcp_instance.tool()
     async def ticket_board(
@@ -751,7 +796,9 @@ def register_ticketing_tools(
         _bd_tok = None
         try:
             project_name = get_project_func(project)
-            _bd_tok = _display_prefix.set(get_prefix_func(project_name) if get_prefix_func else None)
+            _bd_tok = _bind_display(
+                project_name, get_prefix_func(project_name) if get_prefix_func else None
+            )
             # One retry on Neon idle-conn drop (SSL connection closed).
             # Context manager is re-entered to obtain a fresh connection.
             last_op_error: Optional[Exception] = None
@@ -784,7 +831,7 @@ def register_ticketing_tools(
             )
         finally:
             if _bd_tok is not None:
-                _display_prefix.reset(_bd_tok)
+                _unbind_display(_bd_tok)
 
     @mcp_instance.tool()
     async def ticket_search(
@@ -822,7 +869,9 @@ def register_ticketing_tools(
         _sr_tok = None
         try:
             project_name = get_project_func(project)
-            _sr_tok = _display_prefix.set(get_prefix_func(project_name) if get_prefix_func else None)
+            _sr_tok = _bind_display(
+                project_name, get_prefix_func(project_name) if get_prefix_func else None
+            )
             fetch_limit = limit * 3 if compiled_regex else limit
             with get_db_func(project, require_write=False) as conn:
                 schema = _get_schema(project_name)
@@ -853,4 +902,4 @@ def register_ticketing_tools(
             )
         finally:
             if _sr_tok is not None:
-                _display_prefix.reset(_sr_tok)
+                _unbind_display(_sr_tok)
