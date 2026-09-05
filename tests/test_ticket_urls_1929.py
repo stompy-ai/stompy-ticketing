@@ -11,6 +11,8 @@ RED without the 1929 commit: `_bind_display` and `stamp_urls_func` do not
 exist, and `coerce_ticket_ref` raises TicketRefError on a URL.
 """
 
+from pathlib import Path
+
 import pytest
 
 from stompy_ticketing import mcp_tools
@@ -114,3 +116,20 @@ class TestTicketRefAcceptsUrls:
     def test_a_foreign_url_is_still_an_unrecognised_ref(self):
         with pytest.raises(TicketRefError):
             coerce_ticket_ref("https://example.com/dashboard/projects/p/tickets/1", "p")
+
+
+class TestTheDescriptionSaysSo:
+    """STOMPY-1924 description truth: a description that omits a capability is
+    the dogfood-20260727 contract-drift class. If ticket(get) takes a URL, the
+    schema an agent reads has to say so."""
+
+    def _ticket_id_annotation(self):
+        import re
+
+        src = Path(mcp_tools.__file__).read_text()
+        block = src[src.index("        ticket_id: Annotated["):]
+        return re.split(r"\n        ticket_ids:", block)[0]
+
+    def test_ticket_id_description_names_the_url_form(self):
+        text = self._ticket_id_annotation().lower()
+        assert "url" in text, "ticket(get) accepts a URL but its description does not say so"
