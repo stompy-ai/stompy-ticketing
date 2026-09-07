@@ -270,6 +270,10 @@ def register_ticketing_tools(
         for h in getattr(ticket, "history", []):
             if h.changed_by:
                 h.changed_by_display = names.get(h.changed_by)
+        # ORDER, and it is deliberate: the display fields are keyed off the
+        # PRE-redaction value, because that value is what the host was asked
+        # about. Redaction runs last, so the raw field can never carry an
+        # address the display field already replaced (Kimi review of #35).
         return redact_actors(ticket, names)
 
     def _get_schema(project_name: str) -> str:

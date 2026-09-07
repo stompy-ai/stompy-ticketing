@@ -103,12 +103,30 @@ expect_red "$CURRENT" $U
 undo
 
 echo
-CURRENT="===== REVERT 4 (THE OTHER DOOR): REST stops redacting"
+CURRENT="===== REVERT 4 (THE OTHER DOOR): REST stops redacting, every shape"
+echo "$CURRENT ====="
+apply_stdin <<'EOF'
+p = "stompy_ticketing/actors.py"
+s = open(p).read()
+# The boundary itself becomes a pass-through: get, update, move, board and
+# search all go raw at once, which is the point of having ONE boundary.
+s = s.replace("    if payload is None or _depth > 6:\n        return payload",
+              "    if True:\n        return payload")
+open(p, "w").write(s)
+EOF
+expect_red "$CURRENT" $U
+undo
+
+echo
+CURRENT="===== REVERT 4b (THE FORGOTTEN HANDLER): board and search skip the boundary"
 echo "$CURRENT ====="
 apply_stdin <<'EOF'
 p = "stompy_ticketing/api_routes.py"
 s = open(p).read()
-s = s.replace("        return redact_actors(result)", "        return result")
+# Exactly the shape of the original bug: the DETAIL route is redacted and the
+# list-shaped ones are not, which is how the door was forgotten once already.
+s = s.replace("        return redact_payload(\n            _service.board_view(", "        return (\n            _service.board_view(")
+s = s.replace("        return redact_payload(\n            _service.search_tickets(", "        return (\n            _service.search_tickets(")
 open(p, "w").write(s)
 EOF
 expect_red "$CURRENT" $U

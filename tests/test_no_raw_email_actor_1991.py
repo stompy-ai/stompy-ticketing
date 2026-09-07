@@ -18,8 +18,21 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from stompy_ticketing import mcp_tools
-from stompy_ticketing.actors import ADDRESS_PLACEHOLDER, redact_actors, safe_actor
-from stompy_ticketing.models import TicketHistoryEntry, TicketResponse
+from stompy_ticketing.actors import (
+    ADDRESS_PLACEHOLDER,
+    redact_actors,
+    redact_payload,
+    safe_actor,
+)
+from stompy_ticketing.models import (
+    BoardColumn,
+    BoardView,
+    SearchResult,
+    TicketHistoryEntry,
+    TicketResponse,
+    TicketTransition,
+    TicketUpdate,
+)
 
 LEGACY = "jeroen@example.com"
 MINE = "markus@stompy.ai"
@@ -149,30 +162,72 @@ class TestMcpDoor:
 
 # ----------------------------------------------------------------- REST door
 class TestRestDoor:
-    """Two doors, one tested is not tested. This door resolves no display
-    names (that is STOMPY-1454's work), so the placeholder is all it can
-    honestly print — but it must never print the address."""
+    """Two doors, one tested is not tested — and one HANDLER tested is not the
+    door (Kimi review of #35). Every REST shape that can carry an actor is
+    walked here, because per-handler redaction is exactly how this door was
+    forgotten the first time. This door resolves no display names (that is
+    STOMPY-1454's work), so the placeholder is all it can honestly print.
+    """
 
-    def _get(self, ticket):
+    def _call(self, coro_factory, service_method, value):
         from stompy_ticketing import api_routes
 
-        conn = MagicMock()
         ctx = MagicMock()
-        ctx.__enter__ = MagicMock(return_value=conn)
+        ctx.__enter__ = MagicMock(return_value=MagicMock())
         ctx.__exit__ = MagicMock(return_value=False)
         with patch.object(api_routes, "_get_db_for_project", lambda *a, **k: ctx), patch.object(
             api_routes, "_resolve_schema", lambda n: n
-        ), patch.object(api_routes._service, "get_ticket", return_value=ticket):
-            return asyncio.run(api_routes.get_ticket("proj", 7))
+        ), patch.object(api_routes._service, service_method, return_value=value):
+            return asyncio.run(coro_factory(api_routes))
 
-    def test_a_legacy_email_actor_never_reaches_the_wire(self):
-        out = self._get(_ticket())
+    @pytest.mark.parametrize(
+        "handler,service_method,payload_factory",
+        [
+            (
+                lambda m: m.get_ticket("proj", 7),
+                "get_ticket",
+                lambda: _ticket(),
+            ),
+            (
+                lambda m: m.update_ticket("proj", 7, TicketUpdate(title="t")),
+                "update_ticket",
+                lambda: _ticket(),
+            ),
+            (
+                lambda m: m.transition_ticket("proj", 7, TicketTransition(status="confirmed")),
+                "transition_ticket",
+                lambda: _ticket(),
+            ),
+            (
+                lambda m: m.board_view("proj"),
+                "board_view",
+                lambda: BoardView(
+                    columns=[BoardColumn(status="triage", tickets=[_ticket()], count=1)],
+                    total=1,
+                ),
+            ),
+            (
+                lambda m: m.search_tickets("proj", query="bug"),
+                "search_tickets",
+                lambda: SearchResult(tickets=[_ticket()], total=1, query="bug"),
+            ),
+        ],
+    )
+    def test_no_shape_carries_a_legacy_address(self, handler, service_method, payload_factory):
+        out = self._call(handler, service_method, payload_factory())
         assert _addresses(out.model_dump()) == []
+
+    def test_the_detail_shape_prints_the_placeholder(self):
+        out = self._call(lambda m: m.get_ticket("proj", 7), "get_ticket", _ticket())
         assert out.created_by == ADDRESS_PLACEHOLDER
         assert out.history[0].changed_by == ADDRESS_PLACEHOLDER
 
     def test_a_numeric_actor_is_untouched(self):
-        out = self._get(_ticket(created_by="51", history_actor="51"))
+        out = self._call(
+            lambda m: m.get_ticket("proj", 7),
+            "get_ticket",
+            _ticket(created_by="51", history_actor="51"),
+        )
         assert out.created_by == "51"
         assert out.history[0].changed_by == "51"
 
@@ -180,5 +235,26 @@ class TestRestDoor:
         from fastapi import HTTPException
 
         with pytest.raises(HTTPException) as caught:
-            self._get(None)
+            self._call(lambda m: m.get_ticket("proj", 7), "get_ticket", None)
         assert caught.value.status_code == 404
+
+
+# ------------------------------------------------------- the walk, not a call
+class TestTheBoundaryHoldsForEveryShape:
+    def test_a_nested_payload_is_redacted_at_any_depth(self):
+        """`redact_payload` is the boundary: a board holds columns holding
+        tickets holding history, and every level must be reached."""
+        board = BoardView(
+            columns=[BoardColumn(status="triage", tickets=[_ticket()], count=1)], total=1
+        )
+        redact_payload(board, {})
+        assert _addresses(board.model_dump()) == []
+
+    def test_it_never_raises_on_something_that_is_not_a_ticket(self):
+        for odd in (None, 3, "text", {"a": [1, 2]}, [None, {}]):
+            assert redact_payload(odd, {}) is odd or True
+
+    def test_it_uses_the_hosts_name_when_there_is_one(self):
+        result = SearchResult(tickets=[_ticket()], total=1, query="q")
+        redact_payload(result, {LEGACY: "brave-fox-7"})
+        assert result.tickets[0].created_by == "brave-fox-7"
