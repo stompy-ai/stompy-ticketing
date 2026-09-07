@@ -33,6 +33,7 @@ from stompy_ticketing.models import (
     TicketType,
     TicketUpdate,
 )
+from stompy_ticketing.actors import redact_actors
 from stompy_ticketing.service import (
     InvalidTransitionError,
     ParkArgumentError,
@@ -239,21 +240,41 @@ def register_ticketing_tools(
             return None
 
     def _decorate(ticket):
-        """Fill created_by_display / changed_by_display for the reader."""
+        """Fill created_by_display / changed_by_display for the reader — and
+        never let an ADDRESS ride the raw field (STOMPY-1991).
+
+        `changed_by` holds an identity (STOMPY-1594), but rows written before
+        the host stopped stamping emails hold a literal address, and this
+        payload is readable by every member of a shared project. Filling only
+        the `*_display` fields left those addresses on the wire on both doors,
+        because the host's resolver omits ids it cannot name. So an actor
+        value that CONTAINS an `@` is replaced by what the host is willing to
+        show this reader, and by "a member" when the host will show nothing —
+        never by the address itself.
+
+        The host owns the rule (its `attribution_display`: display name, else
+        handle, else the reader's OWN address, else nothing); this only
+        refuses to print what the host withheld. A numeric id is untouched:
+        it names nobody by itself and callers still key on it.
+        """
         ids = {ticket.created_by} | {h.changed_by for h in getattr(ticket, "history", [])}
         ids.discard(None)
         if not ids or not display_actors_func:
-            return ticket
+            return redact_actors(ticket, {})
         try:
             names = display_actors_func(sorted(ids)) or {}
         except Exception:
-            return ticket
+            return redact_actors(ticket, {})
         if ticket.created_by:
             ticket.created_by_display = names.get(ticket.created_by)
         for h in getattr(ticket, "history", []):
             if h.changed_by:
                 h.changed_by_display = names.get(h.changed_by)
-        return ticket
+        # ORDER, and it is deliberate: the display fields are keyed off the
+        # PRE-redaction value, because that value is what the host was asked
+        # about. Redaction runs last, so the raw field can never carry an
+        # address the display field already replaced (Kimi review of #35).
+        return redact_actors(ticket, names)
 
     def _get_schema(project_name: str) -> str:
         """Resolve project name to PostgreSQL schema name."""

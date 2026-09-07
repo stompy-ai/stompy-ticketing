@@ -27,6 +27,7 @@ from stompy_ticketing.models import (
     TicketTransition,
     TicketUpdate,
 )
+from stompy_ticketing.actors import redact_payload
 from stompy_ticketing.service import InvalidTransitionError, TicketService
 
 router = APIRouter(prefix="/projects/{name}/tickets", tags=["Tickets"])
@@ -107,13 +108,15 @@ async def board_view(
     _require_db()
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=False) as conn:
-        return _service.board_view(
-            conn, schema,
-            type_filter=type,
-            view=view,
-            status_filter=ticket_status,
-            include_terminal=include_terminal,
-            include_archived=include_archived,
+        return redact_payload(
+            _service.board_view(
+                conn, schema,
+                type_filter=type,
+                view=view,
+                status_filter=ticket_status,
+                include_terminal=include_terminal,
+                include_archived=include_archived,
+            )
         )
 
 
@@ -132,13 +135,15 @@ async def search_tickets(
     _require_db()
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=False) as conn:
-        return _service.search_tickets(
-            conn, schema, query,
-            type_filter=type,
-            status_filter=ticket_status,
-            limit=limit,
-            include_archived=include_archived,
-            fields=fields,
+        return redact_payload(
+            _service.search_tickets(
+                conn, schema, query,
+                type_filter=type,
+                status_filter=ticket_status,
+                limit=limit,
+                include_archived=include_archived,
+                fields=fields,
+            )
         )
 
 
@@ -179,7 +184,7 @@ async def batch_move(name: str, body: BatchMoveRequest):
         )
     if body.confirm:
         _invalidate_ticket_cache(name)
-    return result
+    return redact_payload(result)
 
 
 @router.post("/batch/close", response_model=BatchOperationResult)
@@ -200,7 +205,7 @@ async def batch_close(name: str, body: BatchCloseRequest):
         )
     if body.confirm:
         _invalidate_ticket_cache(name)
-    return result
+    return redact_payload(result)
 
 
 @router.get("/tags")
@@ -225,7 +230,12 @@ async def get_ticket(name: str, ticket_id: int):
         result = _service.get_ticket(conn, schema, ticket_id)
         if not result:
             raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
-        return result
+        # STOMPY-1991: this door resolves no display names (the host's
+        # `display_actors_func` is wired to the MCP door only — giving REST
+        # its own attribution is STOMPY-1454's job), so a legacy
+        # email-valued actor has nothing to resolve TO. It is still never
+        # printed: the placeholder stands until 1454 gives this door names.
+        return redact_payload(result)
 
 
 @router.put("/{ticket_id}", response_model=TicketResponse)
@@ -238,7 +248,7 @@ async def update_ticket(name: str, ticket_id: int, body: TicketUpdate):
         if not result:
             raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
     _invalidate_ticket_cache(name)
-    return result
+    return redact_payload(result)
 
 
 @router.post("/{ticket_id}/move", response_model=TicketResponse)
@@ -259,7 +269,7 @@ async def transition_ticket(name: str, ticket_id: int, body: TicketTransition):
         except InvalidTransitionError as e:
             raise HTTPException(status_code=422, detail=str(e))
     _invalidate_ticket_cache(name)
-    return result
+    return redact_payload(result)
 
 
 # --------------------------------------------------------------------------- #
@@ -273,7 +283,7 @@ async def add_link(name: str, ticket_id: int, body: TicketLinkCreate):
     _require_db()
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=True) as conn:
-        return _service.add_link(conn, schema, ticket_id, body)
+        return redact_payload(_service.add_link(conn, schema, ticket_id, body))
 
 
 @router.get("/{ticket_id}/links", response_model=List[TicketLinkResponse])
@@ -282,7 +292,7 @@ async def list_links(name: str, ticket_id: int):
     _require_db()
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=False) as conn:
-        return _service.list_links(conn, schema, ticket_id)
+        return redact_payload(_service.list_links(conn, schema, ticket_id))
 
 
 @router.delete("/{ticket_id}/links/{link_id}", status_code=status.HTTP_204_NO_CONTENT)
