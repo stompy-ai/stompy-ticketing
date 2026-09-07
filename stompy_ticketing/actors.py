@@ -29,6 +29,10 @@ from typing import Any, Mapping, Optional
 
 ADDRESS_PLACEHOLDER = "a member"
 
+# board -> columns -> tickets -> history is four; the cap is a loop guard,
+# not a policy, and no shape this package returns comes near it.
+_MAX_DEPTH = 8
+
 __all__ = ["ADDRESS_PLACEHOLDER", "safe_actor", "redact_actors", "redact_payload"]
 
 
@@ -55,7 +59,18 @@ def redact_actors(ticket, names: Optional[Mapping[str, str]] = None):
     return ticket
 
 
-_CONTAINER_FIELDS = ("tickets", "columns", "results", "links", "context_links")
+def _children(payload):
+    """Every value a payload holds that might contain a ticket.
+
+    A pydantic model reports its OWN fields, so the walker follows a ticket
+    nested under any attribute name rather than a hand-written list of five
+    (Kimi review of #35: a list that must be remembered is the same failure as
+    a handler that must be remembered).
+    """
+    fields = getattr(type(payload), "model_fields", None)
+    if fields:
+        return [getattr(payload, name, None) for name in fields]
+    return []
 
 
 def redact_payload(payload, names: Optional[Mapping[str, str]] = None, _depth: int = 0):
@@ -64,13 +79,20 @@ def redact_payload(payload, names: Optional[Mapping[str, str]] = None, _depth: i
     Per-handler redaction is how a door forgets (Kimi review of #35, and this
     PR exists because the REST door was forgotten once): a board, a search
     result and a list all carry the same tickets, so the rule belongs at the
-    boundary every one of them passes through, not at three call sites.
+    boundary every one of them passes through, not at N call sites.
 
-    Walks models, lists, tuples and dicts; redacts anything carrying
-    `created_by`/`history`. Depth-bounded and exception-free — a read must
-    never fail over attribution.
+    Walks models, lists, tuples and dicts to a bounded depth, redacting
+    anything carrying `created_by`/`history`. Exception-free — a read must
+    never fail over attribution — and the depth cap is generous enough for
+    every shape this package returns (board -> columns -> tickets -> history
+    is four).
+
+    MUTATES IN PLACE, deliberately: the models it walks are built per request
+    from database rows, and the host's caches are RESPONSE caches, so the
+    value stored is the redacted one and no reader can be served another
+    reader's resolution.
     """
-    if payload is None or _depth > 6:
+    if payload is None or _depth > _MAX_DEPTH:
         return payload
     try:
         if isinstance(payload, (list, tuple)):
@@ -82,10 +104,9 @@ def redact_payload(payload, names: Optional[Mapping[str, str]] = None, _depth: i
                 redact_payload(value, names, _depth + 1)
             return payload
         redact_actors(payload, names)
-        for field in _CONTAINER_FIELDS:
-            nested = getattr(payload, field, None)
-            if nested is not None:
-                redact_payload(nested, names, _depth + 1)
+        for child in _children(payload):
+            if child is not None and not isinstance(child, (str, bytes, int, float, bool)):
+                redact_payload(child, names, _depth + 1)
     except Exception:  # attribution must never break a read
         return payload
     return payload

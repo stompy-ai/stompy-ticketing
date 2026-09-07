@@ -51,11 +51,15 @@ DRIVER
 expect_red() {
   local label="$1"; shift
   local out="$B/out.txt"
+  local code=0
+  # Honest RED is pytest's exit code ONE (tests ran and failed). 2/3/4 are
+  # usage or internal errors and 5 is "no tests collected" — a renamed file
+  # would otherwise read as evidence (Kimi review of stompy-ticketing#35).
   if $PY -m pytest "$@" -q -p no:cacheprovider  > "$out" 2>&1; then
     echo "!! STILL GREEN: $label — the test does not detect this revert"
     FAILURES=$((FAILURES + 1))
-  elif grep -qE "error(s)? during collection|ImportError|SyntaxError" "$out"; then
-    echo "!! BROKEN, NOT RED: $label — the revert did not compile"
+  elif code=$?; [[ $code -ne 1 ]] || grep -qE "error(s)? during collection|ImportError|SyntaxError|no tests ran" "$out"; then
+    echo "!! BROKEN, NOT RED: $label — pytest exit $code, not an honest test failure"
     tail -5 "$out"
     FAILURES=$((FAILURES + 1))
   else
@@ -110,8 +114,7 @@ p = "stompy_ticketing/actors.py"
 s = open(p).read()
 # The boundary itself becomes a pass-through: get, update, move, board and
 # search all go raw at once, which is the point of having ONE boundary.
-s = s.replace("    if payload is None or _depth > 6:\n        return payload",
-              "    if True:\n        return payload")
+s = s.replace("    if payload is None or _depth > _MAX_DEPTH:", "    if True:")
 open(p, "w").write(s)
 EOF
 expect_red "$CURRENT" $U

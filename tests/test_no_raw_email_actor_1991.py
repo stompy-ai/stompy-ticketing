@@ -17,6 +17,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from pydantic import BaseModel
+
 from stompy_ticketing import mcp_tools
 from stompy_ticketing.actors import (
     ADDRESS_PLACEHOLDER,
@@ -253,6 +255,31 @@ class TestTheBoundaryHoldsForEveryShape:
     def test_it_never_raises_on_something_that_is_not_a_ticket(self):
         for odd in (None, 3, "text", {"a": [1, 2]}, [None, {}]):
             assert redact_payload(odd, {}) is odd or True
+
+    def test_a_ticket_under_an_UNLISTED_attribute_is_still_reached(self):
+        """The walker follows a model's OWN fields, so a future container that
+        holds tickets under a new name is covered the day it is added — a
+        hand-written field list is the same failure as a hand-wired handler
+        (Kimi review of #35)."""
+
+        class Envelope(BaseModel):
+            note: str = "n"
+            ticket: TicketResponse
+
+        env = Envelope(ticket=_ticket())
+        redact_payload(env, {})
+        assert _addresses(env.model_dump()) == []
+
+    def test_two_reads_do_not_contaminate_each_other(self):
+        """In-place mutation is safe because every read builds its own models
+        from rows, and the host caches RESPONSES rather than ticket objects.
+        Pinned rather than assumed: a second read with a different resolver
+        gets its own answer."""
+        first, second = _ticket(), _ticket()
+        redact_payload(first, {LEGACY: "brave-fox-7"})
+        redact_payload(second, {})
+        assert first.created_by == "brave-fox-7"
+        assert second.created_by == ADDRESS_PLACEHOLDER
 
     def test_it_uses_the_hosts_name_when_there_is_one(self):
         result = SearchResult(tickets=[_ticket()], total=1, query="q")
