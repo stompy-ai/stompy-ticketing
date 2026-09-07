@@ -27,6 +27,7 @@ from stompy_ticketing.models import (
     TicketTransition,
     TicketUpdate,
 )
+from stompy_ticketing.actors import redact_actors
 from stompy_ticketing.service import InvalidTransitionError, TicketService
 
 router = APIRouter(prefix="/projects/{name}/tickets", tags=["Tickets"])
@@ -225,7 +226,12 @@ async def get_ticket(name: str, ticket_id: int):
         result = _service.get_ticket(conn, schema, ticket_id)
         if not result:
             raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
-        return result
+        # STOMPY-1991: this door resolves no display names (the host's
+        # `display_actors_func` is wired to the MCP door only — giving REST
+        # its own attribution is STOMPY-1454's job), so a legacy
+        # email-valued actor has nothing to resolve TO. It is still never
+        # printed: the placeholder stands until 1454 gives this door names.
+        return redact_actors(result)
 
 
 @router.put("/{ticket_id}", response_model=TicketResponse)
@@ -238,7 +244,7 @@ async def update_ticket(name: str, ticket_id: int, body: TicketUpdate):
         if not result:
             raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
     _invalidate_ticket_cache(name)
-    return result
+    return redact_actors(result)
 
 
 @router.post("/{ticket_id}/move", response_model=TicketResponse)
@@ -259,7 +265,7 @@ async def transition_ticket(name: str, ticket_id: int, body: TicketTransition):
         except InvalidTransitionError as e:
             raise HTTPException(status_code=422, detail=str(e))
     _invalidate_ticket_cache(name)
-    return result
+    return redact_actors(result)
 
 
 # --------------------------------------------------------------------------- #
