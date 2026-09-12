@@ -463,6 +463,34 @@ def register_ticketing_tools(
                             "Use: ticket(action=\"move\", ticket_id="
                             f"{ticket_id}, status=\"{status}\")"
                         })
+                    # STOMPY-2145. Every recognised field absent means there is
+                    # nothing to write — and the caller almost certainly sent
+                    # something we silently dropped. BUG-213: an agent passing
+                    # comment="..." got `status: updated` and lost a full day of
+                    # review notes, because FastMCP discards parameters the
+                    # schema does not declare and the handler could not tell
+                    # that apart from "update with no changes".
+                    #
+                    # Refuse. A write that wrote nothing is never a success
+                    # (STOMPY-1876). Naming the accepted fields is what turns
+                    # this from a wall into a signpost — and `append` is what
+                    # the agents hitting this actually wanted.
+                    if not any(v is not None for v in (title, description, priority, assignee, tags)):
+                        return json.dumps({
+                            "error": "NOTHING_TO_UPDATE",
+                            "message": (
+                                "update changes nothing: none of title, description, "
+                                "priority, assignee or tags was supplied. Any other "
+                                "parameter is silently discarded before it reaches the "
+                                "server, so a value you passed may have been dropped."
+                            ),
+                            "hint": (
+                                "to add commentary or a report to a ticket use "
+                                "action=\"append\" with description=... (atomic, never "
+                                "clobbers concurrent edits); to change status use "
+                                "action=\"move\""
+                            ),
+                        })
                     tag_list = [t.strip() for t in tags.split(",")] if tags else None
                     data = TicketUpdate(
                         title=title,
