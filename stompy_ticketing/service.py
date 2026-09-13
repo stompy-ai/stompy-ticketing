@@ -2307,37 +2307,9 @@ class TicketService:
 
     def _row_to_response(self, row: Dict[str, Any]) -> TicketResponse:
         """Convert a database row to a TicketResponse."""
-        tags = None
-        if row.get("tags"):
-            try:
-                tags = json.loads(row["tags"])
-            except (json.JSONDecodeError, TypeError):
-                tags = None
+        from stompy_ticketing.ticket_projection import row_to_response
 
-        metadata = None
-        if row.get("metadata"):
-            try:
-                metadata = json.loads(row["metadata"])
-            except (json.JSONDecodeError, TypeError):
-                metadata = None
-
-        return TicketResponse(
-            id=row["id"],
-            title=row["title"],
-            description=row.get("description"),
-            type=row["type"],
-            status=row["status"],
-            priority=row["priority"],
-            assignee=row.get("assignee"),
-            tags=tags,
-            metadata=metadata,
-            session_id=row.get("session_id"),
-            created_by=row.get("created_by"),
-            created_at=row.get("created_at"),
-            updated_at=row.get("updated_at"),
-            closed_at=row.get("closed_at"),
-            archived_at=row.get("archived_at"),
-        )
+        return row_to_response(row)
 
     def _link_row_to_response(self, row: Dict[str, Any]) -> TicketLinkResponse:
         """Convert a link database row to a TicketLinkResponse."""

@@ -29,6 +29,8 @@ def register_plugin(
     actor_func: Optional[Callable] = None,
     display_actors_func: Optional[Callable] = None,
     stamp_urls_func: Optional[Callable] = None,
+    lease_board_func: Optional[Callable] = None,
+    lease_event_func: Optional[Callable] = None,
 ) -> Dict[str, Any]:
     """One-call plugin registration.
 
@@ -56,6 +58,9 @@ def register_plugin(
             - migrations: List of migration definitions to append
             - schema_sql_func: Function(schema) -> DDL SQL for new projects
     """
+    from stompy_ticketing.lease_actions import configure
+
+    configure(board_post=lease_board_func, event=lease_event_func, actor=actor_func)
     # 1. Register MCP tools
     register_ticketing_tools(
         mcp_instance=mcp_instance,
