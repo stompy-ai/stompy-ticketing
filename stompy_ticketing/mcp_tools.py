@@ -18,7 +18,9 @@ import time as _time
 from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 
 from stompy_ticketing.errors import mcp_error, not_found_error, recoverable_error
+from stompy_ticketing.leases import LeaseRefused
 from stompy_ticketing.refs import TicketRefError, coerce_ticket_ref, format_display_id
+from stompy_ticketing.ticket_projection import status_change as _status_change
 from stompy_ticketing.safe_regex import compile_search_regex
 
 from psycopg2 import OperationalError as _OperationalError
@@ -150,26 +152,6 @@ def _omit_empty(obj: Any) -> Any:
     return obj
 
 
-def _status_change(ticket: Any) -> dict:
-    """What a transition changed (STOMPY-1895): the id, the new status, the
-    status it left, when. The caller supplied the body and already has it;
-    action='get' has the record."""
-    # The LATEST status row, whatever order history arrived in (it is
-    # newest-first from _fetch_history, but this must not depend on that).
-    status_rows = [h for h in getattr(ticket, "history", []) if h.field_name == "status"]
-    latest = max(status_rows, key=lambda h: (h.changed_at or 0, h.id), default=None)
-    previous = latest.old_value if latest else None
-    return {
-        "id": ticket.id,
-        "title": ticket.title,
-        "type": ticket.type,
-        "status": ticket.status,
-        "previous_status": previous,
-        "closed_at": ticket.closed_at,
-        "updated_at": ticket.updated_at,
-    }
-
-
 # STOMPY-1432: action classification driving the host's shared-project
 # write-role gate (owner/contributor/admin refuses viewers).
 #
@@ -181,7 +163,7 @@ def _status_change(ticket: Any) -> dict:
 # OPEN on exactly that omission. The test suite pins both totality
 # (READ | WRITE covers each tool's Literal) and disjointness.
 TICKET_WRITE_ACTIONS = frozenset(
-    {"create", "update", "append", "move", "close", "archive", "batch_move", "batch_close"}
+    {"create", "update", "append", "move", "close", "archive", "batch_move", "batch_close", "claim", "release", "claim_next"}
 )
 TICKET_READ_ACTIONS = frozenset({"get", "list", "list_tags"})
 TICKET_LINK_WRITE_ACTIONS = frozenset({"add", "remove"})
@@ -284,7 +266,7 @@ def register_ticketing_tools(
     @mcp_instance.tool()
     async def ticket(
         action: Annotated[
-            Literal["create", "get", "update", "append", "move", "list", "list_tags", "close", "archive", "batch_move", "batch_close"],
+            Literal["create", "get", "update", "append", "move", "list", "list_tags", "close", "archive", "batch_move", "batch_close", "claim", "release", "claim_next"],
             "Operation to perform",
         ],
         title: Annotated[Optional[str], "Ticket title (create/update)"] = None,
@@ -338,6 +320,8 @@ def register_ticketing_tools(
             Optional[Literal["card", "full"]],
             "list only: 'card' (default) = id/title/type/status/priority/tags/assignee/description_preview; 'full' = whole records incl. description",
         ] = None,
+        agent_label: Annotated[str, "Caller-supplied agent label for leases; data, not account identity (max80)"] = "",
+        ttl_minutes: Annotated[int, "Lease duration for claim/claim_next (1..480, default60)"] = 60,
     ) -> str:
         """Create, update, move, close, search, and batch-manage tickets. Supports glob filter on titles (grep param). Pass project= on every call.
 
@@ -355,6 +339,11 @@ def register_ticketing_tools(
           archive     → (none — global sweep of long-closed tickets; to shelve ONE ticket use move + status='parked')
           batch_move  → ticket_ids + status; confirm=True to execute (parked: one reason for the batch)
           batch_close → ticket_ids; confirm=True to execute
+          claim       → ticket_id; renews your lease, refuses another live holder
+          release     → ticket_id; holder only, expired lease is a no-op
+          claim_next  → assignee; returns one highest-priority oldest eligible ticket, already leased
+
+        Claims bump updated_at: re-read after claiming. For manual claiming, use update with expected_updated_at from your last read; CONFLICT means re-read. Append remains atomic and unguarded.
 
         Initial statuses: task→backlog, bug→triage, feature→proposed, decision→open.
         Terminal: task→done/cancelled, bug→resolved/wont_fix, feature→shipped/rejected, decision→decided/deferred.
@@ -432,6 +421,14 @@ def register_ticketing_tools(
                     )
                     result = service.create_ticket(conn, schema, data, changed_by=_actor())
                     return _safe_json({"status": "created", "ticket": result.model_dump()})
+
+                elif action in {"claim", "release", "claim_next"}:
+                    from stompy_ticketing.lease_actions import run_action
+
+                    return _safe_json(run_action(
+                        conn, schema, project_name, action, actor=_actor(), agent_label=agent_label,
+                        ticket_id=ticket_id, ttl_minutes=ttl_minutes, assignee=assignee,
+                    ))
 
                 elif action == "get":
                     if not ticket_id:
@@ -655,11 +652,13 @@ def register_ticketing_tools(
                             "error": f"Unknown action: {action}",
                             "valid_actions": [
                                 "create", "get", "update", "append", "move", "list", "list_tags",
-                                "close", "archive", "batch_move", "batch_close",
+                                "close", "archive", "batch_move", "batch_close", "claim", "release", "claim_next",
                             ],
                         }
                     )
 
+        except LeaseRefused as e:
+            return _safe_json(e.payload())
         except ParkArgumentError as e:
             return recoverable_error(
                 "PARK_ARGUMENT",

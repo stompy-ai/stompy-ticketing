@@ -164,6 +164,9 @@ class TicketResponse(BaseModel):
     updated_at: Optional[float] = None
     closed_at: Optional[float] = None
     archived_at: Optional[float] = None
+    claimed_by: Optional[Dict[str, Any]] = None
+    claimed_at: Optional[float] = None
+    claimed_until: Optional[float] = None
     history: List[TicketHistoryEntry] = Field(default_factory=list)
     links: List[TicketLinkResponse] = Field(default_factory=list)
     context_links: List["ContextLinkResponse"] = Field(default_factory=list)
