@@ -52,7 +52,8 @@ def _emit(level, event, **fields):
     host_event(level, event, **fields)
 
 
-def _single(conn, schema, ticket_id, changed_by, *, restoring):
+def _single(conn, schema, ticket_id, changed_by, *, restoring, project=None):
+    project = project or schema
     try:
         with conn.cursor() as cur:
             cur.execute(
@@ -104,7 +105,7 @@ def _single(conn, schema, ticket_id, changed_by, *, restoring):
                 "warning",
                 "ticket_archive_refused",
                 ticket=ticket_id,
-                project=schema,
+                project=project,
                 reason=exc.reason,
                 restoring=restoring,
             )
@@ -114,7 +115,7 @@ def _single(conn, schema, ticket_id, changed_by, *, restoring):
             "info",
             "ticket_unarchived" if restoring else "ticket_archived",
             ticket=ticket_id,
-            project=schema,
+            project=project,
             actor=changed_by,
         )
     return row_to_response(row)
@@ -130,16 +131,32 @@ class ArchiveMixin:
 
         return archive_stale(conn, schema, ttl_seconds, clock=legacy_clock.time)
 
-    def archive_ticket(self, conn, schema, ticket_id, changed_by=None):
-        return _single(conn, schema, ticket_id, changed_by, restoring=False)
+    def archive_ticket(self, conn, schema, ticket_id, changed_by=None, *, project=None):
+        return _single(
+            conn, schema, ticket_id, changed_by, restoring=False, project=project
+        )
 
-    def unarchive_ticket(self, conn, schema, ticket_id, changed_by=None):
-        return _single(conn, schema, ticket_id, changed_by, restoring=True)
+    def unarchive_ticket(
+        self, conn, schema, ticket_id, changed_by=None, *, project=None
+    ):
+        return _single(
+            conn, schema, ticket_id, changed_by, restoring=True, project=project
+        )
 
-    def batch_archive(self, conn, schema, ticket_ids, confirm=False, changed_by=None):
+    def batch_archive(
+        self, conn, schema, ticket_ids, confirm=False, changed_by=None, *, project=None
+    ):
+        project = project or schema
         if not 1 <= len(ticket_ids) <= 50 or any(
             type(i) is not int or i <= 0 for i in ticket_ids
         ):
+            _emit(
+                "warning",
+                "ticket_archive_refused",
+                project=project,
+                reason="invalid_ids",
+                restoring=False,
+            )
             raise ArchiveRefused(
                 "ARCHIVE_INVALID_IDS",
                 "invalid_ids",
@@ -161,7 +178,9 @@ class ArchiveMixin:
                 if confirm:
                     # Each committed item re-reads/locks its current state;
                     # preview is never authority for a later write.
-                    result = self.archive_ticket(conn, schema, ticket_id, changed_by)
+                    result = self.archive_ticket(
+                        conn, schema, ticket_id, changed_by, project=project
+                    )
                     status = result.status
                 else:
                     _refuse(row)

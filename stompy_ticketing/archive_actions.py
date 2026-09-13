@@ -27,7 +27,7 @@ def archive_action(
                 "INVALID_PARAMS", "ticket_ids must be comma-separated integers"
             )
         result = service.batch_archive(
-            conn, schema, ids, confirm=confirm, changed_by=actor
+            conn, schema, ids, confirm=confirm, changed_by=actor, project=project
         )
         if confirm and result.succeeded:
             _invalidate(project)
@@ -52,7 +52,7 @@ def archive_action(
     method = (
         service.unarchive_ticket if action == "unarchive" else service.archive_ticket
     )
-    result = method(conn, schema, ticket_id, changed_by=actor)
+    result = method(conn, schema, ticket_id, changed_by=actor, project=project)
     _invalidate(project)
     from stompy_ticketing.service import TicketService
 

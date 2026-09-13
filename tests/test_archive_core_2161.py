@@ -90,3 +90,43 @@ def test_batch_archive_preview_does_not_commit_or_update():
     assert result.results[0].ticket_id == 1
     assert len(cur.execute.call_args_list) == 1
     conn.commit.assert_not_called()
+
+
+def test_invalid_batch_ids_emit_named_refusal_without_sql():
+    from stompy_ticketing.archival import ArchiveRefused
+
+    conn, cur = _mock_conn_and_cursor()
+    with patch("stompy_ticketing.archival._emit") as emit:
+        with pytest.raises(ArchiveRefused):
+            TicketService().batch_archive(conn, "project", [0])
+    emit.assert_called_once_with(
+        "warning",
+        "ticket_archive_refused",
+        project="project",
+        reason="invalid_ids",
+        restoring=False,
+    )
+    cur.execute.assert_not_called()
+
+
+def test_archive_event_preserves_project_name_not_database_schema():
+    from stompy_ticketing.archive_actions import archive_action
+
+    before = _make_ticket_row(status="parked")
+    conn, cur = _mock_conn_and_cursor()
+    cur.fetchone.side_effect = [before, {**before, "archived_at": FIXED_TIME}]
+    with patch("stompy_ticketing.archival._emit") as emit:
+        archive_action(
+            TicketService(),
+            conn,
+            "opaque_schema",
+            "archive",
+            1,
+            None,
+            True,
+            "51",
+            "alice/project",
+        )
+    emit.assert_called_once_with(
+        "info", "ticket_archived", ticket=1, project="alice/project", actor="51"
+    )
