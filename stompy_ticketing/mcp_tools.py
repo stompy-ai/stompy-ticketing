@@ -19,6 +19,8 @@ from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 
 from stompy_ticketing.errors import mcp_error, not_found_error, recoverable_error
 from stompy_ticketing.leases import LeaseRefused
+from stompy_ticketing.archival import ArchiveRefused
+from stompy_ticketing.archive_actions import archive_action
 from stompy_ticketing.refs import TicketRefError, coerce_ticket_ref, format_display_id
 from stompy_ticketing.ticket_projection import status_change as _status_change
 from stompy_ticketing.safe_regex import compile_search_regex
@@ -163,7 +165,7 @@ def _omit_empty(obj: Any) -> Any:
 # OPEN on exactly that omission. The test suite pins both totality
 # (READ | WRITE covers each tool's Literal) and disjointness.
 TICKET_WRITE_ACTIONS = frozenset(
-    {"create", "update", "append", "move", "close", "archive", "batch_move", "batch_close", "claim", "release", "claim_next"}
+    {"create", "update", "append", "move", "close", "archive", "batch_archive", "unarchive", "batch_move", "batch_close", "claim", "release", "claim_next"}
 )
 TICKET_READ_ACTIONS = frozenset({"get", "list", "list_tags"})
 TICKET_LINK_WRITE_ACTIONS = frozenset({"add", "remove"})
@@ -266,7 +268,7 @@ def register_ticketing_tools(
     @mcp_instance.tool()
     async def ticket(
         action: Annotated[
-            Literal["create", "get", "update", "append", "move", "list", "list_tags", "close", "archive", "batch_move", "batch_close", "claim", "release", "claim_next"],
+            Literal["create", "get", "update", "append", "move", "list", "list_tags", "close", "archive", "batch_archive", "unarchive", "batch_move", "batch_close", "claim", "release", "claim_next"],
             "Operation to perform",
         ],
         title: Annotated[Optional[str], "Ticket title (create/update)"] = None,
@@ -284,12 +286,12 @@ def register_ticketing_tools(
         tags: Annotated[Optional[str], "Comma-separated tags"] = None,
         ticket_id: Annotated[
             Optional[Union[int, str]],
-            "Ticket ID (get/update/move/close): numeric (1311), prefixed "
+            "Ticket ID (get/update/move/close/archive/unarchive): numeric (1311), prefixed "
             "(STOMPY-1311), or the full ticket URL a human was sent",
         ] = None,
         ticket_ids: Annotated[
             Optional[str],
-            "Comma-separated IDs (batch_move/batch_close); numeric or prefixed, all same project",
+            "Comma-separated IDs (batch_move/batch_close/batch_archive); numeric or prefixed, all same project",
         ] = None,
         confirm: Annotated[bool, "Execute batch operation (default: preview only)"] = False,
         resolution: Annotated[
@@ -336,7 +338,9 @@ def register_ticketing_tools(
           list        → optional filters (type/status/priority/assignee/tags/grep); fields='full' for bodies
           list_tags   → show all unique tags with usage counts (useful before filtering by tags)
           close       → ticket_id
-          archive     → (none — global sweep of long-closed tickets; to shelve ONE ticket use move + status='parked')
+          archive     → ticket_id archives THAT parked/closed ticket without admission; no id runs legacy stale sweep
+          batch_archive → ticket_ids; preview by default, confirm=True to archive eligible parked/closed tickets
+          unarchive   → ticket_id; restore without changing status, counted restores require allowance
           batch_move  → ticket_ids + status; confirm=True to execute (parked: one reason for the batch)
           batch_close → ticket_ids; confirm=True to execute
           claim       → ticket_id; renews your lease, refuses another live holder
@@ -587,22 +591,10 @@ def register_ticketing_tools(
                     result = service.list_tags(conn, schema, include_archived=include_archived)
                     return _safe_json({"tags": result, "total": len(result)})
 
-                elif action == "archive":
-                    if ticket_id is not None or ticket_ids:
-                        # A silently ignored parameter is the STOMPY-1364
-                        # --deselect shape: refuse, and name the real tool.
-                        return mcp_error(
-                            "INVALID_PARAMS",
-                            "archive is a global sweep of long-closed tickets and takes "
-                            "no ticket_id/ticket_ids. To shelve a ticket, use "
-                            "action='move' with status='parked' and a reason.",
-                        )
-                    count = service.archive_stale_tickets(conn, schema)
-                    return json.dumps({
-                        "status": "archived",
-                        "count": count,
-                        "message": f"Archived {count} stale ticket(s)",
-                    })
+                elif action in {"archive", "batch_archive", "unarchive"}:
+                    result = archive_action(service, conn, schema, action, ticket_id,
+                                            ticket_ids, confirm, _actor(), project_name)
+                    return result if isinstance(result, str) else _safe_json(result)
 
                 elif action == "close":
                     if not ticket_id:
@@ -652,12 +644,12 @@ def register_ticketing_tools(
                             "error": f"Unknown action: {action}",
                             "valid_actions": [
                                 "create", "get", "update", "append", "move", "list", "list_tags",
-                                "close", "archive", "batch_move", "batch_close", "claim", "release", "claim_next",
+                                "close", "archive", "batch_archive", "unarchive", "batch_move", "batch_close", "claim", "release", "claim_next",
                             ],
                         }
                     )
 
-        except LeaseRefused as e:
+        except (LeaseRefused, ArchiveRefused) as e:
             return _safe_json(e.payload())
         except ParkArgumentError as e:
             return recoverable_error(
