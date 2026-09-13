@@ -14,6 +14,7 @@ from datetime import date
 from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 from psycopg2 import IntegrityError, sql
+from stompy_ticketing.archival import ArchiveMixin
 
 from stompy_ticketing.models import (
     BatchItemResult,
@@ -346,7 +347,7 @@ class DBConnection(Protocol):
 # =========================================================================== #
 
 
-class TicketService:
+class TicketService(ArchiveMixin):
     """Business logic for ticket operations.
 
     Takes a database connection and schema as parameters (dependency injection).
@@ -843,85 +844,6 @@ class TicketService:
         for step_status in path:
             result = self.transition_ticket(conn, schema, ticket_id, step_status, changed_by)
         return result
-
-    def archive_stale_tickets(
-        self,
-        conn: DBConnection,
-        schema: str,
-        ttl_seconds: int = 1_209_600,
-    ) -> int:
-        """Archive tickets in terminal status past the TTL.
-
-        Sets archived_at on tickets where closed_at < now - ttl and
-        archived_at IS NULL. Records history entries for each.
-
-        Args:
-            conn: Database connection.
-            schema: PostgreSQL schema name.
-            ttl_seconds: Seconds after close before archival (default 14 days).
-
-        Returns:
-            Number of tickets archived.
-        """
-        cur = conn.cursor()
-        try:
-            now = time.time()
-            cutoff = now - ttl_seconds
-
-            # Find stale tickets not yet archived
-            all_terminals = get_all_terminal_statuses()
-            terminal_placeholders = ", ".join(["%s"] * len(all_terminals))
-
-            cur.execute(
-                sql.SQL("""
-                SELECT id, type, status FROM {}.tickets
-                WHERE closed_at IS NOT NULL
-                  AND closed_at < %s
-                  AND archived_at IS NULL
-                  AND status IN ({})
-                """).format(
-                    sql.Identifier(schema),
-                    sql.SQL(terminal_placeholders),
-                ),
-                [cutoff] + all_terminals,
-            )
-            stale = cur.fetchall()
-
-            if not stale:
-                return 0
-
-            stale_ids = [r["id"] for r in stale]
-            id_placeholders = ", ".join(["%s"] * len(stale_ids))
-
-            # Batch update archived_at
-            cur.execute(
-                sql.SQL("""
-                UPDATE {}.tickets
-                SET archived_at = %s
-                WHERE id IN ({})
-                """).format(
-                    sql.Identifier(schema),
-                    sql.SQL(id_placeholders),
-                ),
-                [now] + stale_ids,
-            )
-
-            # Record history entries
-            for ticket in stale:
-                cur.execute(
-                    sql.SQL("""
-                    INSERT INTO {}.ticket_history
-                        (ticket_id, field_name, old_value, new_value, changed_by, changed_at)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    """).format(sql.Identifier(schema)),
-                    (ticket["id"], "archived_at", None, str(now), "system:auto_archive", now),
-                )
-
-            conn.commit()
-            return len(stale_ids)
-        except Exception:
-            conn.rollback()
-            raise
 
     def list_tickets(
         self,

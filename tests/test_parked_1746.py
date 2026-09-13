@@ -424,14 +424,18 @@ def _parked_response():
 
 
 class TestMcpDoor:
-    def test_archive_with_ticket_id_is_refused_loudly(self):
+    def test_archive_with_ticket_id_never_sweeps(self):
         ticket, svc = _register()
-
-        parsed = json.loads(_run(ticket(action="archive", ticket_id=5, project=SCHEMA)))
-
-        assert parsed["success"] is False
-        assert parsed["error"] == "INVALID_PARAMS"
-        assert "parked" in parsed["message"], "the refusal names the right tool for the job"
+        # 2161 replaces the former refusal with a targeted operation. The
+        # original 1746 safety invariant remains: naming an id never sweeps.
+        svc.archive_ticket.return_value = TicketResponse(
+            id=5, title="t", type="task", status=PARKED, priority="medium", archived_at=FIXED_TIME
+        )
+        with patch("stompy_ticketing.mcp_tools._toon_encode", side_effect=json.dumps):
+            parsed = json.loads(_run(ticket(action="archive", ticket_id=5, project=SCHEMA)))
+        assert parsed["status"] == "archived"
+        assert parsed["ticket"]["id"] == 5
+        svc.archive_ticket.assert_called_once()
         svc.archive_stale_tickets.assert_not_called()
 
     def test_archive_with_ticket_ids_is_refused_loudly(self):
