@@ -88,6 +88,8 @@ class BatchMoveRequest(BaseModel):
     ticket_ids: List[int] = Field(..., min_length=1, max_length=50)
     status: str
     confirm: bool = False
+    # Accepted for old clients, then DROPPED: history has no note column, and
+    # this text was once stored as the actor (STOMPY-2380). Never an identity.
     note: Optional[str] = None
     # STOMPY-1746: one reason for the whole batch; required for "parked".
     reason: Optional[str] = None
@@ -97,6 +99,8 @@ class BatchMoveRequest(BaseModel):
 class BatchCloseRequest(BaseModel):
     ticket_ids: List[int] = Field(..., min_length=1, max_length=50)
     confirm: bool = False
+    # Accepted for old clients, then DROPPED: history has no note column, and
+    # this text was once stored as the actor (STOMPY-2380). Never an identity.
     note: Optional[str] = None
 
 

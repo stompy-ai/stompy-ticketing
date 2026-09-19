@@ -43,12 +43,14 @@ _service = TicketService()
 _get_db_for_project: Optional[Callable] = None
 _resolve_schema: Optional[Callable] = None
 _on_ticket_write: Optional[Callable] = None
+_actor_func: Optional[Callable] = None
 
 
 def configure_routes(
     get_db_func: Callable,
     resolve_schema_func: Optional[Callable] = None,
     cache_invalidator_func: Optional[Callable] = None,
+    actor_func: Optional[Callable] = None,
 ) -> None:
     """Configure the router with database access functions.
 
@@ -60,11 +62,24 @@ def configure_routes(
         resolve_schema_func: Function(name) -> schema name. If None, uses name directly.
         cache_invalidator_func: Optional function(project) called after ticket
             writes to invalidate REST response caches. No-op if None.
+        actor_func: Optional function() -> str(internal_id) of the AUTHENTICATED
+            caller — the same hook the MCP door stamps (STOMPY-1594). Every
+            REST write records it as ticket_history.changed_by; nothing the
+            caller sends in a body ever does (STOMPY-2380). None -> NULL.
     """
-    global _get_db_for_project, _resolve_schema, _on_ticket_write
+    global _get_db_for_project, _resolve_schema, _on_ticket_write, _actor_func
     _get_db_for_project = get_db_func
     _resolve_schema = resolve_schema_func
     _on_ticket_write = cache_invalidator_func
+    _actor_func = actor_func
+
+
+def _actor() -> Optional[str]:
+    """Who is writing, from the host's identity — never raises into a write."""
+    try:
+        return _actor_func() if _actor_func else None
+    except Exception:
+        return None
 
 
 def _invalidate_ticket_cache(project: str) -> None:
@@ -178,7 +193,7 @@ async def batch_move(name: str, body: BatchMoveRequest):
         result = _service.batch_transition(
             conn, schema, body.ticket_ids, body.status,
             confirm=body.confirm,
-            changed_by=body.note,
+            changed_by=_actor(),
             reason=body.reason,
             revisit_by=body.revisit_by,
         )
@@ -201,7 +216,7 @@ async def batch_close(name: str, body: BatchCloseRequest):
         result = _service.batch_close(
             conn, schema, body.ticket_ids,
             confirm=body.confirm,
-            changed_by=body.note,
+            changed_by=_actor(),
         )
     if body.confirm:
         _invalidate_ticket_cache(name)
@@ -244,7 +259,7 @@ async def update_ticket(name: str, ticket_id: int, body: TicketUpdate):
     _require_db()
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=True) as conn:
-        result = _service.update_ticket(conn, schema, ticket_id, body)
+        result = _service.update_ticket(conn, schema, ticket_id, body, changed_by=_actor())
         if not result:
             raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
     _invalidate_ticket_cache(name)
@@ -261,6 +276,7 @@ async def transition_ticket(name: str, ticket_id: int, body: TicketTransition):
             result = _service.transition_ticket(
                 conn, schema, ticket_id, body.status,
                 reason=body.reason, revisit_by=body.revisit_by,
+                changed_by=_actor(),
             )
             if not result:
                 raise HTTPException(
