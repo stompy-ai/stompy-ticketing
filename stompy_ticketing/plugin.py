@@ -82,6 +82,7 @@ def register_plugin(
         get_db_func=get_db_func,
         resolve_schema_func=resolve_schema_func,
         cache_invalidator_func=cache_invalidator_func,
+        actor_func=actor_func,  # 2380: REST stamps the same identity as MCP
     )
     api_router.include_router(router)
     logger.info("stompy_ticketing: REST API routes mounted")
