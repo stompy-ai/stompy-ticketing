@@ -20,7 +20,7 @@ from stompy_ticketing.schema import (
 
 # Kept in step with pyproject.toml by hand; it had drifted to 0.5.3 while
 # the package shipped 0.8.4 (STOMPY-1929).
-__version__ = "0.8.10"
+__version__ = "0.8.11"
 
 __all__ = [
     "TicketService",
