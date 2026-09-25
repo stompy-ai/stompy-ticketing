@@ -110,19 +110,35 @@ def find_possible_duplicates(
 
     try:
         cur = conn.cursor()
-        cur.execute(
-            sql.SQL(_QUERY).format(tickets=sql.SQL("{}.tickets").format(sql.Identifier(schema))),
+        try:
+            cur.execute(
+                sql.SQL(_QUERY).format(
+                    tickets=sql.SQL("{}.tickets").format(sql.Identifier(schema))
+                ),
+                {
+                    "title": title,
+                    "description": description or "",
+                    "hash": content_hash(title, description),
+                    "terminal": get_all_terminal_statuses(),
+                    "exclude": exclude_id if exclude_id is not None else -1,
+                    "max_candidates": MAX_CANDIDATES,
+                    "pool": TITLE_RERANK_POOL,
+                },
+            )
+            rows = cur.fetchall()
+        finally:
+            cur.close()
+        hints = [r for r in rows if float(r["similarity"]) >= SIMILARITY_THRESHOLD]
+        return [
             {
-                "title": title,
-                "description": description or "",
-                "hash": content_hash(title, description),
-                "terminal": get_all_terminal_statuses(),
-                "exclude": exclude_id if exclude_id is not None else -1,
-                "max_candidates": MAX_CANDIDATES,
-                "pool": TITLE_RERANK_POOL,
-            },
-        )
-        rows = cur.fetchall()
+                "id": r["id"],
+                "display_id": format_display_id(prefix, r["id"]),
+                "title": r["title"],
+                "status": r["status"],
+                "similarity": round(float(r["similarity"]), 2),
+            }
+            for r in hints[:MAX_HINTS]
+        ]
     except Exception as e:
         try:
             conn.rollback()
@@ -133,17 +149,6 @@ def find_possible_duplicates(
             extra={"schema": schema, "error_type": type(e).__name__},
         )
         return None
-    hints = [r for r in rows if float(r["similarity"]) >= SIMILARITY_THRESHOLD][:MAX_HINTS]
-    return [
-        {
-            "id": r["id"],
-            "display_id": format_display_id(prefix, r["id"]),
-            "title": r["title"],
-            "status": r["status"],
-            "similarity": round(float(r["similarity"]), 2),
-        }
-        for r in hints
-    ]
 
 
 def response_fields(hints: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:

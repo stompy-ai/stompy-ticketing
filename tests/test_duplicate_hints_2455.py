@@ -125,6 +125,11 @@ def test_a_failing_check_returns_none_rolls_back_and_names_a_warning(caplog):
     assert "secret_schema" not in record.getMessage()
 
 
+def test_an_unreadable_row_is_still_soft():
+    conn, _ = _mock_conn_and_cursor(rows=[{"id": 1, "title": "t", "status": "open", "similarity": None}])
+    assert duplicates.find_possible_duplicates(conn, "proj", "t", "d") is None
+
+
 def test_a_failing_rollback_is_still_soft():
     conn, cur = _mock_conn_and_cursor()
     cur.execute.side_effect = RuntimeError("boom")
