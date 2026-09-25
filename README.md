@@ -142,8 +142,12 @@ Initial: `open` | Terminal: `decided`, `deferred`
 Primary CRUD and state transitions. Supports 6 actions:
 
 ```python
-# Create a ticket
+# Create a ticket. The response lists up to 3 OPEN tickets it may duplicate
+# (possible_duplicates + one guidance sentence; advisory, never blocking).
 ticket(action="create", title="Fix login bug", type="bug", priority="high")
+
+# Check for duplicates without creating anything
+ticket(action="create", title="Fix login bug", dry_run=True)
 
 # List tickets with filters
 ticket(action="list", type="task", status="in_progress")

@@ -6,7 +6,6 @@ Follows the ContextService pattern from dementia-production:
 - TEXT for JSON strings (tags, metadata), DOUBLE PRECISION timestamps
 """
 
-import hashlib
 import json
 import re
 import time
@@ -15,6 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 from psycopg2 import IntegrityError, sql
 from stompy_ticketing.archival import ArchiveMixin
+from stompy_ticketing.duplicates import content_hash as duplicate_content_hash
 
 from stompy_ticketing.models import (
     BatchItemResult,
@@ -379,9 +379,8 @@ class TicketService(ArchiveMixin):
         tags_json = json.dumps(data.tags) if data.tags else None
         metadata_json = json.dumps(data.metadata) if data.metadata else None
 
-        # Content hash for deduplication
-        content = f"{data.title}|{data.description or ''}"
-        content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
+        # Read by duplicates.find_possible_duplicates as its exact-match path (2455)
+        content_hash = duplicate_content_hash(data.title, data.description)
 
         cur = conn.cursor()
         try:

@@ -17,6 +17,7 @@ import json
 import time as _time
 from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 
+from stompy_ticketing import duplicates
 from stompy_ticketing.errors import mcp_error, not_found_error, recoverable_error
 from stompy_ticketing.leases import LeaseRefused
 from stompy_ticketing.archival import ArchiveRefused
@@ -324,13 +325,14 @@ def register_ticketing_tools(
         ] = None,
         agent_label: Annotated[str, "Caller-supplied agent label for leases; data, not account identity (max80)"] = "",
         ttl_minutes: Annotated[int, "Lease duration for claim/claim_next (1..480, default60)"] = 60,
+        dry_run: Annotated[bool, "create only: return possible_duplicates, create nothing"] = False,
     ) -> str:
         """Create, update, move, close, search, and batch-manage tickets. Supports glob filter on titles (grep param). Pass project= on every call.
 
         Payloads: list returns CARDS (no description body; description_preview instead) — get returns the FULL record; move/close return the status change only.
 
         action → required params:
-          create      → title (type defaults to task)
+          create      → title (type defaults to task); the response names possible_duplicates (dry_run=True: only those)
           get         → ticket_id (full record: description, history, links)
           update      → ticket_id + fields to change (+ expected_updated_at to refuse stale writes)
           append      → ticket_id + description (ATOMIC append — reports/results; never clobbers concurrent edits)
@@ -411,9 +413,18 @@ def register_ticketing_tools(
                         "move/close have no stale-write protection yet (STOMPY-1579 follow-up)"
                     })
 
+                if dry_run and action != "create":
+                    return json.dumps({"error": "dry_run only applies to action=\"create\""})
+
                 if action == "create":
                     if not title:
                         return json.dumps({"error": "title is required for create"})
+                    prefix = get_prefix_func(project_name) if get_prefix_func else None
+                    if dry_run:
+                        hints = duplicates.find_possible_duplicates(
+                            conn, schema, title, description, exclude_id=None, prefix=prefix
+                        )
+                        return _safe_json({"status": "dry_run", **duplicates.response_fields(hints)})
                     tag_list = [t.strip() for t in tags.split(",")] if tags else None
                     data = TicketCreate(
                         title=title,
@@ -424,7 +435,15 @@ def register_ticketing_tools(
                         tags=tag_list,
                     )
                     result = service.create_ticket(conn, schema, data, changed_by=_actor())
-                    return _safe_json({"status": "created", "ticket": result.model_dump()})
+                    # 2455: after the commit, so a failed hint can never undo the create
+                    hints = duplicates.find_possible_duplicates(
+                        conn, schema, title, description, exclude_id=result.id, prefix=prefix
+                    )
+                    return _safe_json({
+                        "status": "created",
+                        "ticket": result.model_dump(),
+                        **duplicates.response_fields(hints),
+                    })
 
                 elif action in {"claim", "release", "claim_next"}:
                     from stompy_ticketing.lease_actions import run_action
