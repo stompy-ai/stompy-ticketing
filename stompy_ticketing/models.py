@@ -137,9 +137,18 @@ class TicketLinkResponse(BaseModel):
     target_id: int
     link_type: str
     created_at: Optional[float] = None
-    # Denormalized target info for display
+    # Denormalized endpoint info: each *_title/_status belongs to the ticket
+    # named by the matching *_id, whichever end is being read (STOMPY-2843).
+    source_title: Optional[str] = None
+    source_status: Optional[str] = None
     target_title: Optional[str] = None
     target_status: Optional[str] = None
+    # Viewer-relative: the COUNTERPART of the ticket this row was read from.
+    direction: Optional[str] = None  # "outgoing" (viewed is source) | "incoming"
+    relation: Optional[str] = None  # link_type, or "blocked_by" for incoming blocks
+    peer_id: Optional[int] = None
+    peer_title: Optional[str] = None
+    peer_status: Optional[str] = None
 
 
 class TicketResponse(BaseModel):

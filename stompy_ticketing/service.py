@@ -1858,7 +1858,7 @@ class TicketService(ArchiveMixin):
                 row["target_status"] = target["status"]
 
             conn.commit()
-            return self._link_row_to_response(row)
+            return self._link_row_to_response(row, source_id)
         except IntegrityError:
             conn.rollback()
             raise LinkAlreadyExistsError(
@@ -2143,22 +2143,24 @@ class TicketService(ArchiveMixin):
         placeholders = sql.SQL(", ").join(sql.Placeholder() * len(ticket_ids))
         cur.execute(
             sql.SQL("""
-            SELECT tl.*, t.title as target_title, t.status as target_status
+            SELECT tl.*,
+                   src.title AS source_title, src.status AS source_status,
+                   tgt.title AS target_title, tgt.status AS target_status
             FROM {}.ticket_links tl
-            JOIN {}.tickets t ON t.id = tl.target_id
+            JOIN {}.tickets src ON src.id = tl.source_id
+            JOIN {}.tickets tgt ON tgt.id = tl.target_id
             WHERE tl.source_id IN ({ph}) OR tl.target_id IN ({ph})
-            """).format(sch, sch, ph=placeholders),
+            """).format(sch, sch, sch, ph=placeholders),
             ticket_ids + ticket_ids,
         )
         result: Dict[int, List[TicketLinkResponse]] = {tid: [] for tid in ticket_ids}
         for row in cur.fetchall():
-            link = self._link_row_to_response(row)
-            # Attribute the link to the input ticket on whichever side matches.
-            # STOMPY-2839: target_title is the title of target_id, always.
-            if link.source_id in result:
-                result[link.source_id].append(link)
-            if link.target_id in result and link.target_id != link.source_id:
-                result[link.target_id].append(link)
+            # Attribute the link to the input ticket on whichever side matches,
+            # oriented to that viewer (STOMPY-2843).
+            if row["source_id"] in result:
+                result[row["source_id"]].append(self._link_row_to_response(row, row["source_id"]))
+            if row["target_id"] in result and row["target_id"] != row["source_id"]:
+                result[row["target_id"]].append(self._link_row_to_response(row, row["target_id"]))
         return result
 
     def _get_context_links_for_tickets_bulk(
@@ -2208,14 +2210,17 @@ class TicketService(ArchiveMixin):
         sch = sql.Identifier(schema)
         cur.execute(
             sql.SQL("""
-            SELECT tl.*, t.title as target_title, t.status as target_status
+            SELECT tl.*,
+                   src.title AS source_title, src.status AS source_status,
+                   tgt.title AS target_title, tgt.status AS target_status
             FROM {}.ticket_links tl
-            JOIN {}.tickets t ON t.id = tl.target_id
+            JOIN {}.tickets src ON src.id = tl.source_id
+            JOIN {}.tickets tgt ON tgt.id = tl.target_id
             WHERE tl.source_id = %s OR tl.target_id = %s
-            """).format(sch, sch),
+            """).format(sch, sch, sch),
             (ticket_id, ticket_id),
         )
-        return [self._link_row_to_response(r) for r in cur.fetchall()]
+        return [self._link_row_to_response(r, ticket_id) for r in cur.fetchall()]
 
     def _row_to_response(self, row: Dict[str, Any]) -> TicketResponse:
         """Convert a database row to a TicketResponse."""
@@ -2223,14 +2228,33 @@ class TicketService(ArchiveMixin):
 
         return row_to_response(row)
 
-    def _link_row_to_response(self, row: Dict[str, Any]) -> TicketLinkResponse:
-        """Convert a link database row to a TicketLinkResponse."""
+    def _link_row_to_response(
+        self, row: Dict[str, Any], viewed_id: Optional[int] = None
+    ) -> TicketLinkResponse:
+        """Convert a link row, oriented to the ticket being read (STOMPY-2843).
+
+        source_*/target_* are always honest about source_id/target_id.
+        peer_*, direction and relation describe the COUNTERPART of
+        viewed_id: outgoing when viewed_id is the source (or on a
+        self-link), incoming otherwise. Without viewed_id, viewed is the
+        source.
+        """
+        src_id, tgt_id = row["source_id"], row["target_id"]
+        outgoing = viewed_id is None or viewed_id == src_id
+        link_type = row["link_type"]
         return TicketLinkResponse(
             id=row["id"],
-            source_id=row["source_id"],
-            target_id=row["target_id"],
-            link_type=row["link_type"],
+            source_id=src_id,
+            target_id=tgt_id,
+            link_type=link_type,
             created_at=row.get("created_at"),
+            source_title=row.get("source_title"),
+            source_status=row.get("source_status"),
             target_title=row.get("target_title"),
             target_status=row.get("target_status"),
+            direction="outgoing" if outgoing else "incoming",
+            relation=link_type if outgoing or link_type != "blocks" else "blocked_by",
+            peer_id=tgt_id if outgoing else src_id,
+            peer_title=row.get("target_title") if outgoing else row.get("source_title"),
+            peer_status=row.get("target_status") if outgoing else row.get("source_status"),
         )
