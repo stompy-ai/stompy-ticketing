@@ -2146,22 +2146,18 @@ class TicketService(ArchiveMixin):
             SELECT tl.*, t.title as target_title, t.status as target_status
             FROM {}.ticket_links tl
             JOIN {}.tickets t ON t.id = tl.target_id
-            WHERE tl.source_id IN ({ph})
-            UNION ALL
-            SELECT tl.*, t.title as target_title, t.status as target_status
-            FROM {}.ticket_links tl
-            JOIN {}.tickets t ON t.id = tl.source_id
-            WHERE tl.target_id IN ({ph})
-            """).format(sch, sch, sch, sch, ph=placeholders),
+            WHERE tl.source_id IN ({ph}) OR tl.target_id IN ({ph})
+            """).format(sch, sch, ph=placeholders),
             ticket_ids + ticket_ids,
         )
         result: Dict[int, List[TicketLinkResponse]] = {tid: [] for tid in ticket_ids}
         for row in cur.fetchall():
             link = self._link_row_to_response(row)
             # Attribute the link to the input ticket on whichever side matches.
+            # STOMPY-2839: target_title is the title of target_id, always.
             if link.source_id in result:
                 result[link.source_id].append(link)
-            elif link.target_id in result:
+            if link.target_id in result and link.target_id != link.source_id:
                 result[link.target_id].append(link)
         return result
 
@@ -2215,13 +2211,8 @@ class TicketService(ArchiveMixin):
             SELECT tl.*, t.title as target_title, t.status as target_status
             FROM {}.ticket_links tl
             JOIN {}.tickets t ON t.id = tl.target_id
-            WHERE tl.source_id = %s
-            UNION ALL
-            SELECT tl.*, t.title as target_title, t.status as target_status
-            FROM {}.ticket_links tl
-            JOIN {}.tickets t ON t.id = tl.source_id
-            WHERE tl.target_id = %s
-            """).format(sch, sch, sch, sch),
+            WHERE tl.source_id = %s OR tl.target_id = %s
+            """).format(sch, sch),
             (ticket_id, ticket_id),
         )
         return [self._link_row_to_response(r) for r in cur.fetchall()]
