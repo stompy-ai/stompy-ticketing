@@ -573,7 +573,7 @@ class TestLinks:
         # The follow-up SELECT fetches target ticket info
         target_ticket_row = {"title": "Target ticket", "status": "backlog"}
         conn, cur = _mock_conn_and_cursor()
-        cur.fetchone.side_effect = [raw_insert_row, target_ticket_row]
+        cur.fetchone.side_effect = [None, raw_insert_row, target_ticket_row]  # None: no reverse blocks link
 
         data = TicketLinkCreate(target_id=2, link_type=LinkType.blocks)
         result = self.service.add_link(conn, SCHEMA, 1, data)
@@ -598,7 +598,7 @@ class TestLinks:
         # The follow-up SELECT fetches target ticket info
         target_ticket_row = {"title": "Implement auth", "status": "in_progress"}
         conn, cur = _mock_conn_and_cursor()
-        cur.fetchone.side_effect = [raw_insert_row, target_ticket_row]
+        cur.fetchone.side_effect = [None, raw_insert_row, target_ticket_row]  # None: no reverse blocks link
 
         data = TicketLinkCreate(target_id=2, link_type=LinkType.blocks)
         result = self.service.add_link(conn, SCHEMA, 1, data)

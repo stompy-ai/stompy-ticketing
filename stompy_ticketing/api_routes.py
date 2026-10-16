@@ -28,7 +28,11 @@ from stompy_ticketing.models import (
     TicketUpdate,
 )
 from stompy_ticketing.actors import redact_payload
-from stompy_ticketing.service import InvalidTransitionError, TicketService
+from stompy_ticketing.service import (
+    InvalidTransitionError,
+    LinkRefusedError,
+    TicketService,
+)
 
 router = APIRouter(prefix="/projects/{name}/tickets", tags=["Tickets"])
 
@@ -299,7 +303,10 @@ async def add_link(name: str, ticket_id: int, body: TicketLinkCreate):
     _require_db()
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=True) as conn:
-        return redact_payload(_service.add_link(conn, schema, ticket_id, body))
+        try:
+            return redact_payload(_service.add_link(conn, schema, ticket_id, body))
+        except LinkRefusedError as e:
+            raise HTTPException(status_code=422, detail=f"{e.code}: {e}")
 
 
 @router.get("/{ticket_id}/links", response_model=List[TicketLinkResponse])

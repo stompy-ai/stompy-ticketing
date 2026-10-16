@@ -44,6 +44,7 @@ from stompy_ticketing.service import (
     InvalidTransitionError,
     ParkArgumentError,
     LinkAlreadyExistsError,
+    LinkRefusedError,
     TicketService,
 )
 
@@ -824,6 +825,9 @@ def register_ticketing_tools(
                         {"error": f"Unknown action: {action}", "valid_actions": ["add", "remove", "list"]}
                     )
 
+        except LinkRefusedError as e:
+            # error_type stays "ValueError": the host books that as a client refusal.
+            return json.dumps({"error": str(e), "error_type": "ValueError", "code": e.code})
         except LinkAlreadyExistsError as e:
             return json.dumps(
                 {"error": str(e), "error_type": "ALREADY_LINKED"}
