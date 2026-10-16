@@ -1918,6 +1918,34 @@ class TicketService(ArchiveMixin):
         cur = conn.cursor()
         return self._get_links_for_ticket(cur, schema, ticket_id)
 
+    def list_all_links(
+        self,
+        conn: DBConnection,
+        schema: str,
+        ticket_id: int,
+    ) -> List[TicketLinkResponse]:
+        """Ticket links (kind='ticket') then context links (kind='context').
+
+        STOMPY-2858: the REST list shows both. list_links stays ticket-only
+        because the MCP list action reports context links separately.
+        """
+        rows = self.list_links(conn, schema, ticket_id)
+        for c in self.list_context_links_for_ticket(conn, schema, ticket_id):
+            rows.append(
+                TicketLinkResponse(
+                    id=c.id,
+                    kind="context",
+                    ticket_id=c.ticket_id,
+                    context_label=c.context_label,
+                    context_version=c.context_version,
+                    link_type=c.link_type,
+                    created_at=c.created_at,
+                    direction="outgoing",
+                    relation=c.link_type,
+                )
+            )
+        return rows
+
     # --- Context link methods --- #
 
     def add_context_link(

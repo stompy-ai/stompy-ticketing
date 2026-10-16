@@ -304,11 +304,11 @@ async def add_link(name: str, ticket_id: int, body: TicketLinkCreate):
 
 @router.get("/{ticket_id}/links", response_model=List[TicketLinkResponse])
 async def list_links(name: str, ticket_id: int):
-    """List all links for a ticket."""
+    """List all links for a ticket: ticket links, then context links (kind field)."""
     _require_db()
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=False) as conn:
-        return redact_payload(_service.list_links(conn, schema, ticket_id))
+        return redact_payload(_service.list_all_links(conn, schema, ticket_id))
 
 
 @router.delete("/{ticket_id}/links/{link_id}", status_code=status.HTTP_204_NO_CONTENT)

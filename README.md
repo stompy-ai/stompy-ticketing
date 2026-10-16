@@ -232,7 +232,7 @@ All endpoints are mounted at `/projects/{name}/tickets`.
 | `PUT` | `/projects/{name}/tickets/{id}` | Update ticket fields |
 | `POST` | `/projects/{name}/tickets/{id}/move` | Transition ticket status |
 | `POST` | `/projects/{name}/tickets/{id}/links` | Add a ticket link |
-| `GET` | `/projects/{name}/tickets/{id}/links` | List ticket links |
+| `GET` | `/projects/{name}/tickets/{id}/links` | List links: ticket links, then context links (`kind`: `ticket` \| `context`) |
 | `DELETE` | `/projects/{name}/tickets/{id}/links/{link_id}` | Remove a ticket link |
 
 ## Plugin SDK Pattern
