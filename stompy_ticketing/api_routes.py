@@ -30,6 +30,7 @@ from stompy_ticketing.models import (
 from stompy_ticketing.actors import redact_payload
 from stompy_ticketing.service import (
     InvalidTransitionError,
+    LinkAlreadyExistsError,
     LinkRefusedError,
     TicketService,
 )
@@ -307,6 +308,9 @@ async def add_link(name: str, ticket_id: int, body: TicketLinkCreate):
             return redact_payload(_service.add_link(conn, schema, ticket_id, body))
         except LinkRefusedError as e:
             raise HTTPException(status_code=422, detail=f"{e.code}: {e}")
+        except LinkAlreadyExistsError as e:
+            suffix = f" (existing link id {e.link_id})" if e.link_id else ""
+            raise HTTPException(status_code=409, detail=f"ALREADY_LINKED: {e}{suffix}")
 
 
 @router.get("/{ticket_id}/links", response_model=List[TicketLinkResponse])

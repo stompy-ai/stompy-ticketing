@@ -620,7 +620,8 @@ class TestLinks:
         }
         target_ticket_row = {"title": "Deploy pipeline", "status": "backlog"}
         conn, cur = _mock_conn_and_cursor()
-        cur.fetchone.side_effect = [raw_insert_row, target_ticket_row]
+        # first None: the symmetric reverse-link lookup (STOMPY-2880)
+        cur.fetchone.side_effect = [None, raw_insert_row, target_ticket_row]
 
         data = TicketLinkCreate(target_id=20, link_type=LinkType.related)
         add_result = self.service.add_link(conn, SCHEMA, 10, data)
