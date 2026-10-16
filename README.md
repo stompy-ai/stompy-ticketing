@@ -231,7 +231,7 @@ All endpoints are mounted at `/projects/{name}/tickets`.
 | `GET` | `/projects/{name}/tickets/{id}` | Get ticket by ID |
 | `PUT` | `/projects/{name}/tickets/{id}` | Update ticket fields |
 | `POST` | `/projects/{name}/tickets/{id}/move` | Transition ticket status |
-| `POST` | `/projects/{name}/tickets/{id}/links` | Add a ticket link (422 `SELF_LINK` for a self-link, `LINK_CYCLE` for a direct blocks 2-cycle) |
+| `POST` | `/projects/{name}/tickets/{id}/links` | Add a ticket link (422 `SELF_LINK` for a self-link, `LINK_CYCLE` for a direct blocks 2-cycle; 409 `ALREADY_LINKED` for an existing link, incl. the reverse of a `related` link) |
 | `GET` | `/projects/{name}/tickets/{id}/links` | List links: ticket links, then context links (`kind`: `ticket` \| `context`) |
 | `DELETE` | `/projects/{name}/tickets/{id}/links/{link_id}` | Remove a ticket link |
 

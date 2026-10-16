@@ -50,15 +50,21 @@ class InvalidTransitionError(Exception):
     pass
 
 
+_SYMMETRIC_LINK_TYPES = frozenset({LinkType.related})
+
+
 class LinkAlreadyExistsError(ValueError):
     """Raised when add_link/add_context_link hits a duplicate UNIQUE constraint.
 
     Subclasses ValueError so existing callers that catch ValueError keep
     working; new callers can catch this specifically to return a structured
     `ALREADY_LINKED` error code instead of a raw IntegrityError.
+    `link_id` is the existing link's id when known (STOMPY-2880).
     """
 
-    pass
+    def __init__(self, message: str, link_id: Optional[int] = None):
+        super().__init__(message)
+        self.link_id = link_id
 
 
 class LinkRefusedError(ValueError):
@@ -1869,6 +1875,17 @@ class TicketService(ArchiveMixin):
                         "dependency cycle that neither could ever leave. "
                         "Remove the existing link first if the direction was wrong.",
                     )
+            if data.link_type in _SYMMETRIC_LINK_TYPES:
+                # A related B and B related A are one link (STOMPY-2880).
+                existing = self._find_link_id(
+                    cur, schema, data.target_id, source_id, data.link_type.value
+                )
+                if existing is not None:
+                    raise LinkAlreadyExistsError(
+                        f"Link already exists between ticket #{source_id} and "
+                        f"#{data.target_id}",
+                        link_id=existing,
+                    )
             now = time.time()
             cur.execute(
                 sql.SQL("""
@@ -1896,14 +1913,38 @@ class TicketService(ArchiveMixin):
 
             conn.commit()
             return self._link_row_to_response(row, source_id)
+        except LinkAlreadyExistsError:
+            conn.rollback()
+            raise
         except IntegrityError:
             conn.rollback()
+            try:  # best-effort: the id is a courtesy, the refusal is the point
+                existing = self._find_link_id(
+                    cur, schema, source_id, data.target_id, data.link_type.value
+                )
+            except Exception:
+                conn.rollback()
+                existing = None
             raise LinkAlreadyExistsError(
-                f"Link already exists between ticket #{source_id} and #{data.target_id}"
+                f"Link already exists between ticket #{source_id} and #{data.target_id}",
+                link_id=existing,
             )
         except Exception:
             conn.rollback()
             raise
+
+    @staticmethod
+    def _find_link_id(cur, schema: str, source: int, target: int, link_type: str):
+        cur.execute(
+            sql.SQL("""
+            SELECT id FROM {}.ticket_links
+            WHERE source_id = %s AND target_id = %s AND link_type = %s
+            LIMIT 1
+            """).format(sql.Identifier(schema)),
+            (source, target, link_type),
+        )
+        row = cur.fetchone()
+        return row["id"] if row else None
 
     def remove_link(
         self,
