@@ -133,8 +133,14 @@ class TicketHistoryEntry(BaseModel):
 
 class TicketLinkResponse(BaseModel):
     id: int
-    source_id: int
-    target_id: int
+    # "ticket" (ticket_links row) | "context" (ticket_context_links row; the
+    # REST list adds these, source_id/target_id/peer_* are null for them).
+    kind: str = "ticket"
+    source_id: Optional[int] = None
+    target_id: Optional[int] = None
+    ticket_id: Optional[int] = None  # context rows: the ticket the link hangs on
+    context_label: Optional[str] = None
+    context_version: Optional[str] = None
     link_type: str
     created_at: Optional[float] = None
     # Denormalized endpoint info: each *_title/_status belongs to the ticket
