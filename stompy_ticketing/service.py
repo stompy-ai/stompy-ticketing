@@ -23,6 +23,7 @@ from stompy_ticketing.models import (
     BoardView,
     CompactTicket,
     ContextLinkCreate,
+    LinkType,
     ContextLinkResponse,
     Priority,
     SearchResult,
@@ -58,6 +59,18 @@ class LinkAlreadyExistsError(ValueError):
     """
 
     pass
+
+
+class LinkRefusedError(ValueError):
+    """add_link refused a link that can never be valid (STOMPY-2871).
+
+    `code` is SELF_LINK or LINK_CYCLE. Subclasses ValueError so the host
+    books it as a client refusal, not a server fault.
+    """
+
+    def __init__(self, code: str, message: str):
+        super().__init__(message)
+        self.code = code
 
 
 # PARKED (STOMPY-1746): "deliberately not now". Reachable from every
@@ -1830,8 +1843,32 @@ class TicketService(ArchiveMixin):
         Returns:
             Created link response.
         """
+        if data.target_id == source_id:
+            raise LinkRefusedError(
+                "SELF_LINK",
+                f"Ticket #{source_id} cannot be linked to itself; "
+                "pick a different target_id.",
+            )
         cur = conn.cursor()
         try:
+            if data.link_type == LinkType.blocks:
+                # Direct 2-cycle only (STOMPY-2871); longer cycles are not checked.
+                cur.execute(
+                    sql.SQL("""
+                    SELECT 1 FROM {}.ticket_links
+                    WHERE source_id = %s AND target_id = %s AND link_type = 'blocks'
+                    LIMIT 1
+                    """).format(sql.Identifier(schema)),
+                    (data.target_id, source_id),
+                )
+                if cur.fetchone():
+                    raise LinkRefusedError(
+                        "LINK_CYCLE",
+                        f"Ticket #{data.target_id} already blocks #{source_id}; "
+                        f"#{source_id} blocking #{data.target_id} would make a "
+                        "dependency cycle that neither could ever leave. "
+                        "Remove the existing link first if the direction was wrong.",
+                    )
             now = time.time()
             cur.execute(
                 sql.SQL("""

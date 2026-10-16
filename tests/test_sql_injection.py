@@ -229,7 +229,7 @@ class TestServiceUsesIdentifier:
         }
         target_row = {"title": "Target", "status": "backlog"}
         conn, cur = _mock_conn_and_cursor()
-        cur.fetchone.side_effect = [insert_row, target_row]
+        cur.fetchone.side_effect = [None, insert_row, target_row]  # None: no reverse blocks link
 
         data = TicketLinkCreate(target_id=2, link_type=LinkType.blocks)
         self.service.add_link(conn, SAFE_SCHEMA, 1, data)
