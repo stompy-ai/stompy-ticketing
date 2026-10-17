@@ -264,7 +264,19 @@ async def update_ticket(name: str, ticket_id: int, body: TicketUpdate):
     _require_db()
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=True) as conn:
-        result = _service.update_ticket(conn, schema, ticket_id, body, changed_by=_actor())
+        try:
+            result = _service.update_ticket(conn, schema, ticket_id, body, changed_by=_actor())
+        except TicketService.Conflict as c:
+            # STOMPY-2961: same refusal as the MCP action; the caller re-reads and retries
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error_code": "CONFLICT",
+                    "message": str(c),
+                    "expected_updated_at": c.expected_updated_at,
+                    "current_updated_at": c.current_updated_at,
+                },
+            )
         if not result:
             raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
     _invalidate_ticket_cache(name)

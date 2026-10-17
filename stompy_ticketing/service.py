@@ -582,6 +582,9 @@ class TicketService(ArchiveMixin):
         Returns:
             Updated ticket or None if not found.
         """
+        if expected_updated_at is None:
+            # STOMPY-2961: the REST body carries the guard on the model
+            expected_updated_at = data.expected_updated_at
         cur = conn.cursor()
         try:
             # Get current ticket
