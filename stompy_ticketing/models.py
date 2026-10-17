@@ -64,6 +64,9 @@ class TicketUpdate(BaseModel):
     assignee: Optional[str] = None
     tags: Optional[List[str]] = None
     metadata: Optional[Dict[str, Any]] = None
+    # STOMPY-2961: optimistic guard for the REST door (the MCP door passes it as
+    # a kwarg). Never a stored column; a stale value raises TicketService.Conflict.
+    expected_updated_at: Optional[float] = None
 
 
 class TicketTransition(BaseModel):
