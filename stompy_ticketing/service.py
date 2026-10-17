@@ -1951,6 +1951,7 @@ class TicketService(ArchiveMixin):
         conn: DBConnection,
         schema: str,
         link_id: int,
+        ticket_id: Optional[int] = None,
     ) -> bool:
         """Remove a ticket link.
 
@@ -1958,17 +1959,21 @@ class TicketService(ArchiveMixin):
             conn: Database connection.
             schema: PostgreSQL schema name.
             link_id: Link ID.
+            ticket_id: When given (STOMPY-2985), the link is removed only if this
+                ticket is its source or target; otherwise it is "not found" and
+                nothing is deleted.
 
         Returns:
-            True if deleted, False if not found.
+            True if deleted, False if not found (or not on ``ticket_id``).
         """
         cur = conn.cursor()
         try:
             cur.execute(
-                sql.SQL("DELETE FROM {}.ticket_links WHERE id = %s RETURNING id").format(
-                    sql.Identifier(schema)
-                ),
-                (link_id,),
+                sql.SQL(
+                    "DELETE FROM {}.ticket_links WHERE id = %s "
+                    "AND (%s::int IS NULL OR source_id = %s OR target_id = %s) RETURNING id"
+                ).format(sql.Identifier(schema)),
+                (link_id, ticket_id, ticket_id, ticket_id),
             )
             result = cur.fetchone()
             conn.commit()
@@ -2091,6 +2096,7 @@ class TicketService(ArchiveMixin):
         conn: DBConnection,
         schema: str,
         link_id: int,
+        ticket_id: Optional[int] = None,
     ) -> bool:
         """Remove a ticket↔context link.
 
@@ -2098,17 +2104,20 @@ class TicketService(ArchiveMixin):
             conn: Database connection.
             schema: PostgreSQL schema name.
             link_id: Context link ID.
+            ticket_id: When given (STOMPY-2985), only a link hanging on this ticket
+                is removed.
 
         Returns:
-            True if deleted, False if not found.
+            True if deleted, False if not found (or not on ``ticket_id``).
         """
         cur = conn.cursor()
         try:
             cur.execute(
                 sql.SQL(
-                    "DELETE FROM {}.ticket_context_links WHERE id = %s RETURNING id"
+                    "DELETE FROM {}.ticket_context_links WHERE id = %s "
+                    "AND (%s::int IS NULL OR ticket_id = %s) RETURNING id"
                 ).format(sql.Identifier(schema)),
-                (link_id,),
+                (link_id, ticket_id, ticket_id),
             )
             result = cur.fetchone()
             conn.commit()

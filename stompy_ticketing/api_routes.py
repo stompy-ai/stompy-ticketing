@@ -328,6 +328,10 @@ async def remove_link(name: str, ticket_id: int, link_id: int):
     _require_db()
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=True) as conn:
-        removed = _service.remove_link(conn, schema, link_id)
+        # STOMPY-2985: scoped to the path's ticket; an id both tables hold resolves
+        # to this ticket's own link. One flat 404 for foreign/unknown link or ticket.
+        removed = _service.remove_link(
+            conn, schema, link_id, ticket_id=ticket_id
+        ) or _service.remove_context_link(conn, schema, link_id, ticket_id=ticket_id)
         if not removed:
             raise HTTPException(status_code=404, detail=f"Link {link_id} not found")
