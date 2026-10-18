@@ -721,7 +721,7 @@ def register_ticketing_tools(
 
         Actions:
           add    → ticket_id + target_id or context_label
-          remove → link_id
+          remove → link_id (+ ticket_id: only if that ticket is an endpoint)
           list   → ticket_id (returns all links)"""
         _lk_prefix_token = None
         try:
@@ -802,9 +802,12 @@ def register_ticketing_tools(
                     if not link_id:
                         return json.dumps({"error": "link_id is required for remove"})
                     # Try ticket-to-ticket link first, then context link
-                    removed = service.remove_link(conn, schema, link_id)
+                    # STOMPY-2985: a given ticket_id scopes the removal to its own links.
+                    removed = service.remove_link(conn, schema, link_id, ticket_id=ticket_id)
                     if not removed:
-                        removed = service.remove_context_link(conn, schema, link_id)
+                        removed = service.remove_context_link(
+                            conn, schema, link_id, ticket_id=ticket_id
+                        )
                     if not removed:
                         return json.dumps({"error": f"Link {link_id} not found"})
                     return json.dumps({"status": "removed", "link_id": link_id})
