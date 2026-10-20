@@ -48,7 +48,10 @@ def caught_error_answer(exc: BaseException, tool: str, *, code: str, failed: str
         return json.dumps({"error": f"{prefix}: {str(exc)[:200]}", "error_type": name})
 
     if is_statement_cancel(exc):
-        logger.warning("ticket_tool_db_timeout", extra={"tool": tool, "error_type": name})
+        logger.warning(
+            "ticket_tool_db_timeout tool=%s error_type=%s", tool, name,
+            extra={"tool": tool, "error_type": name},
+        )
         return recoverable_error(
             "TOOL_DB_TIMEOUT",
             f"{tool} ran past its time limit and the database stopped it. Retry, or narrow "
@@ -57,8 +60,13 @@ def caught_error_answer(exc: BaseException, tool: str, *, code: str, failed: str
         )
 
     reference = uuid.uuid4().hex[:12]
+    # The host formats stdlib records as "%(message)s" (extras are dropped), so the
+    # fields go IN the message; the traceback carries the driver's text.
     logger.error(
-        "ticket_tool_failed",
+        "ticket_tool_failed tool=%s error_type=%s reference=%s",
+        tool,
+        name,
+        reference,
         exc_info=exc,
         extra={"tool": tool, "error_type": name, "reference": reference},
     )
