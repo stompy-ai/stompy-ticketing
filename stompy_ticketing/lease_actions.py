@@ -3,6 +3,7 @@
 import logging
 
 from stompy_ticketing import leases
+from stompy_ticketing.log_fields import fields_message
 from stompy_ticketing.ticket_projection import row_to_response
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ def _emit(level, event, **fields):
     if _event:
         _event(level, event, **fields)
     else:
-        getattr(logger, level)(event, extra=fields)
+        getattr(logger, level)(*fields_message(event, fields), extra=fields)
 
 
 def run_action(

@@ -45,6 +45,7 @@ from typing import Any, Dict, List, Optional
 
 from psycopg2 import sql
 
+from stompy_ticketing.log_fields import fields_message
 from stompy_ticketing.refs import format_display_id
 
 logger = logging.getLogger(__name__)
@@ -144,10 +145,8 @@ def find_possible_duplicates(
             conn.rollback()
         except Exception:
             pass
-        logger.warning(
-            "ticket_duplicate_hints_failed",
-            extra={"schema": schema, "error_type": type(e).__name__},
-        )
+        fields = {"schema": schema, "error_type": type(e).__name__}
+        logger.warning(*fields_message("ticket_duplicate_hints_failed", fields), extra=fields)
         return None
 
 
