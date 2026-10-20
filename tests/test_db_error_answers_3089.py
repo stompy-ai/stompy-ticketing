@@ -112,6 +112,10 @@ def test_anything_else_is_the_sites_code_with_a_reference_the_log_carries(name, 
     assert out["reference"] and out["reference"] in out["message"]
     (rec,) = [r for r in caplog.records if r.levelno == logging.ERROR]
     assert rec.reference == out["reference"] and rec.tool == name
+    # The host formats stdlib records as "%(message)s": `extra` fields never reach its
+    # log, so the reference, tool and class must be IN the message to be findable.
+    message = rec.getMessage()
+    assert f"reference={out['reference']}" in message and f"tool={name}" in message
     assert _SECRET in rec.getMessage() or _SECRET in str(rec.exc_info[1])
 
 
