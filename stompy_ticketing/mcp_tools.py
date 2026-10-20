@@ -18,6 +18,7 @@ import time as _time
 from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 
 from stompy_ticketing import duplicates
+from stompy_ticketing.db_error_answer import caught_error_answer, is_statement_cancel
 from stompy_ticketing.errors import mcp_error, not_found_error, recoverable_error
 from stompy_ticketing.leases import LeaseRefused
 from stompy_ticketing.archival import ArchiveRefused
@@ -685,8 +686,9 @@ def register_ticketing_tools(
         except ValueError as e:
             return json.dumps({"error": str(e), "error_type": "ValueError"})
         except Exception as e:
-            return json.dumps(
-                {"error": f"Ticket operation failed: {str(e)[:200]}", "error_type": e.__class__.__name__}
+            return caught_error_answer(
+                e, "ticket", code="TICKET_FAILED", failed="Ticket operation failed",
+                prefix="Ticket operation failed",
             )
         finally:
             if _prefix_token is not None:
@@ -836,8 +838,9 @@ def register_ticketing_tools(
                 {"error": str(e), "error_type": "ALREADY_LINKED"}
             )
         except Exception as e:
-            return json.dumps(
-                {"error": f"Link operation failed: {str(e)[:200]}", "error_type": e.__class__.__name__}
+            return caught_error_answer(
+                e, "ticket_link", code="LINK_FAILED", failed="Link operation failed",
+                prefix="Link operation failed",
             )
         finally:
             if _lk_prefix_token is not None:
@@ -889,7 +892,7 @@ def register_ticketing_tools(
                         return _safe_json(result)
                 except _OperationalError as op_err:
                     last_op_error = op_err
-                    if attempt == 0:
+                    if attempt == 0 and not is_statement_cancel(op_err):
                         _time.sleep(0.1)
                         continue
                     raise
@@ -897,8 +900,9 @@ def register_ticketing_tools(
             raise last_op_error or RuntimeError("board_view retry loop fell through")
 
         except Exception as e:
-            return json.dumps(
-                {"error": f"Board view failed: {str(e)[:200]}", "error_type": e.__class__.__name__}
+            return caught_error_answer(
+                e, "ticket_board", code="BOARD_UNAVAILABLE", failed="Board view failed",
+                prefix="Board view failed",
             )
         finally:
             if _bd_tok is not None:
@@ -965,8 +969,9 @@ def register_ticketing_tools(
                 return _safe_json(result)
 
         except Exception as e:
-            return json.dumps(
-                {"error": f"Search failed: {str(e)[:200]}", "error_type": e.__class__.__name__}
+            return caught_error_answer(
+                e, "ticket_search", code="SEARCH_FAILED", failed="Search failed",
+                prefix="Search failed",
             )
         finally:
             if _sr_tok is not None:

@@ -237,9 +237,10 @@ class TestBug133BoardRetry:
         result_text = _run(tools["ticket_board"]())
         result = json.loads(result_text)
 
-        # After one failed retry, the error surfaces.
-        assert "error" in result
-        assert result["error_type"] == "OperationalError"
+        # After one failed retry, the error surfaces — as our authored, retryable
+        # connection code, never the driver's text (STOMPY-3089 follow-up).
+        assert result["error"] == "CONNECTION_DROPPED"
+        assert "conn closed" not in result_text and result["reference"]
         assert mock_svc.board_view.call_count == 2
 
 
