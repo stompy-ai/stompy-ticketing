@@ -120,7 +120,8 @@ def test_a_failing_check_returns_none_rolls_back_and_names_a_warning(caplog):
     conn.rollback.assert_called_once()
     [record] = [r for r in caplog.records if r.name == "stompy_ticketing.duplicates"]
     assert record.levelno == logging.WARNING
-    assert record.getMessage() == "ticket_duplicate_hints_failed"
+    # The fields ride IN the message since 0.8.21: the host's log drops `extra`.
+    assert record.getMessage() == "ticket_duplicate_hints_failed schema=proj error_type=RuntimeError"
     assert record.error_type == "RuntimeError"
     assert "secret_schema" not in record.getMessage()
 
