@@ -266,6 +266,20 @@ async def update_ticket(name: str, ticket_id: int, body: TicketUpdate):
     with _get_db_for_project(name, require_write=True) as conn:
         try:
             result = _service.update_ticket(conn, schema, ticket_id, body, changed_by=_actor())
+        except TicketService.DescriptionWouldReplace as w:
+            # STOMPY-2394: the MCP door's refusal; this door opts in with "confirm": true in the body
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error_code": "DESCRIPTION_WOULD_REPLACE",
+                    "message": (
+                        f"update would replace the stored description ({w.stored_length} chars) "
+                        "with text that does not contain it, so nothing was written. Send the "
+                        'description extended, or "confirm": true in the body to replace it.'
+                    ),
+                    "stored_length": w.stored_length,
+                },
+            )
         except TicketService.Conflict as c:
             # STOMPY-2961: same refusal as the MCP action; the caller re-reads and retries
             raise HTTPException(

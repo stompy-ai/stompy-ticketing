@@ -104,7 +104,7 @@ class TestOptimisticUpdate:
         compare between SELECT and UPDATE is the race, not the fix."""
         svc, conn, cur = self._run([_row(updated_at=100.0), _row(description="mine")])
         out = svc.update_ticket(
-            conn, "s", 7, TicketUpdate(description="mine"), expected_updated_at=100.0
+            conn, "s", 7, TicketUpdate(description="mine", confirm=True), expected_updated_at=100.0
         )
         assert out is not None
         update = next(q for q in _sqls(cur) if "UPDATE" in q)
@@ -119,7 +119,7 @@ class TestOptimisticUpdate:
         )
         with pytest.raises(TicketService.Conflict) as e:
             svc.update_ticket(
-                conn, "s", 7, TicketUpdate(description="mine"), expected_updated_at=100.0
+                conn, "s", 7, TicketUpdate(description="mine", confirm=True), expected_updated_at=100.0
             )
         assert e.value.current_updated_at == 200.0
         assert e.value.expected_updated_at == 100.0
@@ -128,13 +128,13 @@ class TestOptimisticUpdate:
     def test_zero_rows_under_guard_for_a_deleted_ticket_returns_none(self):
         svc, conn, cur = self._run([_row(updated_at=100.0), None, None])
         out = svc.update_ticket(
-            conn, "s", 7, TicketUpdate(description="mine"), expected_updated_at=50.0
+            conn, "s", 7, TicketUpdate(description="mine", confirm=True), expected_updated_at=50.0
         )
         assert out is None
 
     def test_no_guard_keeps_old_behaviour(self):
         svc, conn, cur = self._run([_row(updated_at=200.0), _row(description="mine")])
-        out = svc.update_ticket(conn, "s", 7, TicketUpdate(description="mine"))
+        out = svc.update_ticket(conn, "s", 7, TicketUpdate(description="mine", confirm=True))
         assert out is not None
         update = next(q for q in _sqls(cur) if "UPDATE" in q)
         assert "AND updated_at" not in update

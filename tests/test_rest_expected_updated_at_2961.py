@@ -32,7 +32,7 @@ def test_service_guards_with_the_value_carried_on_the_model_2961():
     conn, cur = _conn([_row(updated_at=200.0), None, {"updated_at": 200.0}])
     with pytest.raises(TicketService.Conflict) as e:
         TicketService().update_ticket(
-            conn, "s", 7, TicketUpdate(description="mine", expected_updated_at=100.0)
+            conn, "s", 7, TicketUpdate(description="mine", confirm=True, expected_updated_at=100.0)
         )
     assert e.value.expected_updated_at == 100.0
     assert e.value.current_updated_at == 200.0
@@ -42,7 +42,7 @@ def test_service_guards_with_the_value_carried_on_the_model_2961():
 def test_explicit_kwarg_wins_over_model_value_2961():
     conn, cur = _conn([_row(updated_at=100.0), _row(description="mine")])
     TicketService().update_ticket(
-        conn, "s", 7, TicketUpdate(description="mine", expected_updated_at=1.0),
+        conn, "s", 7, TicketUpdate(description="mine", confirm=True, expected_updated_at=1.0),
         expected_updated_at=100.0,
     )
     upd = next(c for c in cur.execute.call_args_list if c.args and "UPDATE" in str(c.args[0]))
@@ -64,7 +64,7 @@ async def _put(conn, body):
 @pytest.mark.asyncio
 async def test_rest_stale_expected_updated_at_is_409_conflict_2961():
     conn, _ = _conn([_row(updated_at=200.0), None, {"updated_at": 200.0}])
-    r = await _put(conn, {"description": "mine", "expected_updated_at": 100.0})
+    r = await _put(conn, {"description": "mine", "confirm": True, "expected_updated_at": 100.0})
     assert r.status_code == 409, r.text
     d = r.json()["detail"]
     assert d["error_code"] == "CONFLICT"
@@ -75,5 +75,5 @@ async def test_rest_stale_expected_updated_at_is_409_conflict_2961():
 @pytest.mark.asyncio
 async def test_rest_without_expected_updated_at_is_unchanged_2961():
     conn, _ = _conn([_row(updated_at=100.0), _row(description="mine")])
-    r = await _put(conn, {"description": "mine"})
+    r = await _put(conn, {"description": "mine", "confirm": True})
     assert r.status_code == 200, r.text

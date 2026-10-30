@@ -296,7 +296,7 @@ def register_ticketing_tools(
             Optional[str],
             "Comma-separated IDs (batch_move/batch_close/batch_archive); numeric or prefixed, all same project",
         ] = None,
-        confirm: Annotated[bool, "Execute batch operation (default: preview only)"] = False,
+        confirm: Annotated[bool, "batch_*: execute (default: preview only); update: allow description to REPLACE a non-empty one"] = False,
         resolution: Annotated[
             Optional[str],
             "Terminal status enum value for close (NOT free-text). "
@@ -336,8 +336,10 @@ def register_ticketing_tools(
         action → required params:
           create      → title (type defaults to task); the response names possible_duplicates (dry_run=True: only those)
           get         → ticket_id (full record: description, history, links)
-          update      → ticket_id + fields to change (+ expected_updated_at to refuse stale writes)
-          append      → ticket_id + description (ATOMIC append — reports/results; never clobbers concurrent edits)
+          update      → ticket_id + fields to change (+ expected_updated_at to refuse stale writes).
+                        description REPLACES the whole body: refused DESCRIPTION_WOULD_REPLACE when the
+                        new text does not contain the stored one; confirm=True replaces anyway
+          append      → ticket_id + description: ADDS to the body (ATOMIC — notes/reports/results; never clobbers)
           move        → ticket_id + status (one step; a refusal names the path — close walks it) (status='parked' also needs reason; optional revisit_by)
           list        → optional filters (type/status/priority/assignee/tags/grep); fields='full' for bodies
           list_tags   → show all unique tags with usage counts (useful before filtering by tags)
@@ -526,6 +528,17 @@ def register_ticketing_tools(
                             conn, schema, ticket_id, data,
                             expected_updated_at=expected_updated_at,
                             changed_by=_actor(),
+                            confirm=confirm,
+                        )
+                    except service.DescriptionWouldReplace as w:
+                        return recoverable_error(
+                            "DESCRIPTION_WOULD_REPLACE",
+                            str(w),
+                            [
+                                'To add a note or report: action="append" with description=...',
+                                "To replace the body on purpose: repeat the update with confirm=true",
+                            ],
+                            {"stored_length": w.stored_length},
                         )
                     except service.Conflict as c:
                         return _safe_json({
