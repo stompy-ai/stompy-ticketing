@@ -67,6 +67,10 @@ class TicketUpdate(BaseModel):
     # STOMPY-2961: optimistic guard for the REST door (the MCP door passes it as
     # a kwarg). Never a stored column; a stale value raises TicketService.Conflict.
     expected_updated_at: Optional[float] = None
+    # STOMPY-2394: opt-in to REPLACE a non-empty description the new text does
+    # not contain. Never a stored column; without it TicketService raises
+    # DescriptionWouldReplace and writes nothing.
+    confirm: bool = False
 
 
 class TicketTransition(BaseModel):

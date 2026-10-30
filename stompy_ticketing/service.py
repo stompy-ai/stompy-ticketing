@@ -497,6 +497,20 @@ class TicketService(ArchiveMixin):
                 f"you expected {expected_updated_at}) — re-read and retry, or use append"
             )
 
+    class DescriptionWouldReplace(Exception):
+        """update_ticket refused to REPLACE a non-empty description with text
+        that does not contain it (STOMPY-2394): twice an agent meaning to add a
+        note sent update(description=<the note>) and wiped the ticket body.
+        Nothing was written. append_description adds; confirm=True replaces."""
+
+        def __init__(self, stored_length: int):
+            self.stored_length = stored_length
+            super().__init__(
+                f"update would replace the stored description ({stored_length} chars) "
+                "with text that does not contain it, so nothing was written. Use "
+                'action="append" to add to it, or pass confirm=true to replace it.'
+            )
+
     MAX_APPEND_CHARS = 20_000
 
     def append_description(
@@ -567,6 +581,7 @@ class TicketService(ArchiveMixin):
         data: TicketUpdate,
         changed_by: Optional[str] = None,
         expected_updated_at: Optional[float] = None,
+        confirm: bool = False,
     ) -> Optional[TicketResponse]:
         """Update ticket fields (not status - use transition_ticket for that).
 
@@ -578,6 +593,9 @@ class TicketService(ArchiveMixin):
             changed_by: Who made the change.
             expected_updated_at: optimistic guard (STOMPY-1579) — refuse with
                 Conflict when the stored updated_at differs (>1ms) from this.
+            confirm: allow a description REPLACE (STOMPY-2394). Without it, a
+                description that does not contain the stored non-empty one
+                raises DescriptionWouldReplace and nothing is written.
 
         Returns:
             Updated ticket or None if not found.
@@ -585,6 +603,7 @@ class TicketService(ArchiveMixin):
         if expected_updated_at is None:
             # STOMPY-2961: the REST body carries the guard on the model
             expected_updated_at = data.expected_updated_at
+        confirm = confirm or data.confirm  # STOMPY-2394: same split as the guard above
         cur = conn.cursor()
         try:
             # Get current ticket
@@ -613,6 +632,9 @@ class TicketService(ArchiveMixin):
                 history_entries.append(("title", current["title"], data.title))
 
             if data.description is not None and data.description != current.get("description"):
+                stored = (current.get("description") or "").strip()
+                if stored and stored not in data.description and not confirm:
+                    raise TicketService.DescriptionWouldReplace(len(current["description"]))
                 updates["description"] = data.description
                 history_entries.append(("description", current.get("description"), data.description))
 
