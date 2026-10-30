@@ -676,6 +676,13 @@ class TicketService(ArchiveMixin):
                 # caller read — exact equality, enforced by the database
                 where += " AND updated_at = %s"
                 values.append(expected_updated_at)
+            # STOMPY-3275: a description write is a compare-and-swap on the text the
+            # 2394 guard judged, so an append landing between the read and this write
+            # conflicts instead of being erased (confirm or not).
+            guard_description = "description" in updates
+            if guard_description:
+                where += " AND description IS NOT DISTINCT FROM %s"
+                values.append(current.get("description"))
 
             cur.execute(
                 sql.SQL("""
@@ -691,7 +698,7 @@ class TicketService(ArchiveMixin):
                 values,
             )
             updated_row = cur.fetchone()
-            if updated_row is None and expected_updated_at is not None:
+            if updated_row is None and (expected_updated_at is not None or guard_description):
                 # zero rows under the guard: gone, or moved — tell them which
                 cur.execute(
                     sql.SQL("SELECT updated_at FROM {}.tickets WHERE id = %s").format(
@@ -704,7 +711,8 @@ class TicketService(ArchiveMixin):
                 if row is None:
                     return None
                 raise TicketService.Conflict(
-                    expected_updated_at, row.get("updated_at") or 0.0
+                    expected_updated_at if expected_updated_at is not None else current["updated_at"],
+                    row.get("updated_at") or 0.0,
                 )
 
             # Record history
