@@ -1,9 +1,9 @@
 """Pydantic request/response models for stompy-ticketing."""
 
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # --------------------------------------------------------------------------- #
@@ -164,6 +164,24 @@ class TicketLinkResponse(BaseModel):
     peer_status: Optional[str] = None
 
 
+class CardLink(BaseModel):
+    """A ticket link on a board card (fields="card", STOMPY-3284): the
+    counterpart only. relation/direction mean what they mean on the full row;
+    the peer's title is one ticket(get) away."""
+
+    # A full link row must never validate as a card link (REST re-validates).
+    model_config = ConfigDict(extra="forbid")
+
+    peer_id: int
+    relation: str
+    direction: str
+    peer_status: Optional[str] = None
+
+
+def _unset(v: Any) -> bool:
+    return v is None
+
+
 class TicketResponse(BaseModel):
     id: int
     title: str
@@ -194,8 +212,12 @@ class TicketResponse(BaseModel):
     claimed_at: Optional[float] = None
     claimed_until: Optional[float] = None
     history: List[TicketHistoryEntry] = Field(default_factory=list)
-    links: List[TicketLinkResponse] = Field(default_factory=list)
-    context_links: List["ContextLinkResponse"] = Field(default_factory=list)
+    # Full rows everywhere except board cards, which carry CardLinks and
+    # context labels, capped, with the totals set only when capped (3284).
+    links: List[Union[TicketLinkResponse, CardLink]] = Field(default_factory=list)
+    context_links: List[Union["ContextLinkResponse", str]] = Field(default_factory=list)
+    links_total: Optional[int] = Field(None, exclude_if=_unset)
+    context_links_total: Optional[int] = Field(None, exclude_if=_unset)
 
 
 class ContextLinkResponse(BaseModel):

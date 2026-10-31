@@ -12,6 +12,8 @@ import itertools
 import re
 from unittest.mock import MagicMock
 
+import psycopg2.errors
+
 _TICKETS = re.compile(r"FROM \w+\.tickets\b")
 
 
@@ -23,8 +25,12 @@ def _is_ticket_read(text):
 class FakeBoardCursor:
     """Answers board_view's queries from an in-memory table."""
 
-    def __init__(self, rows, counts=None, link_rows=None):
+    def __init__(self, rows, counts=None, link_rows=None, columns=None):
         self.rows = rows
+        # The table's real columns: the catalog answers them, and the row
+        # query fails on any other bare column as Postgres would. None: the
+        # catalog answers nothing and every column exists.
+        self.columns = columns
         self.counts = counts  # override: what GROUP BY says when the table is "bigger"
         self.link_rows = link_rows or {}  # {"ticket_links": [...], "context_links": [...]}
         self.executed = []  # (sql_text, params)
@@ -43,7 +49,9 @@ class FakeBoardCursor:
         self.executed.append((text, params))
         self._one = {"count": 0}
         self._result = []
-        if "context_links" in text:
+        if "information_schema.columns" in text:
+            self._result = [{"column_name": c} for c in sorted(self.columns or ())]
+        elif "context_links" in text:
             self._result = list(self.link_rows.get("context_links", []))
         elif "ticket_links" in text:
             self._result = list(self.link_rows.get("ticket_links", []))
@@ -57,6 +65,7 @@ class FakeBoardCursor:
                     counts[r["status"]] = counts.get(r["status"], 0) + 1
             self._result = [{"status": s, "count": c} for s, c in sorted(counts.items())]
         elif "row_number()" in text:
+            self._check_columns(text)
             limit = params[-1] if "board_rank <= %s" in text else None
             seen, out = {}, []
             for r in self.rows:
@@ -69,6 +78,15 @@ class FakeBoardCursor:
             # The pre-3284 shape: every matching row, limit applied in Python.
             self.rows_fetched += len(self.rows)
             self._result = list(self.rows)
+
+    def _check_columns(self, text):
+        if self.columns is None:
+            return
+        select_list = text.split("FROM (SELECT ", 1)[1].split(", row_number()", 1)[0]
+        for item in select_list.split(", "):
+            name = item[len("LEFT("):] if item.startswith("LEFT(") else item
+            if re.fullmatch(r"\w+", name) and name not in self.columns:
+                raise psycopg2.errors.UndefinedColumn(f'column "{name}" does not exist')
 
     def board_queries(self):
         return [
@@ -86,12 +104,12 @@ class FakeBoardCursor:
 _databases = itertools.count(1)
 
 
-def board_conn(rows, counts=None, dsn=None, link_rows=None):
+def board_conn(rows, counts=None, dsn=None, link_rows=None, columns=None):
     """A connection to its OWN database unless dsn says otherwise, so the
     process-wide sweep throttle never leaks from one test into the next."""
     dsn = dsn or {"host": "h", "port": "5432", "dbname": f"d{next(_databases)}"}
     conn = MagicMock()
-    cur = FakeBoardCursor(rows, counts, link_rows)
+    cur = FakeBoardCursor(rows, counts, link_rows, columns)
     conn.cursor.return_value = cur
     conn.get_dsn_parameters.return_value = dsn
     return conn, cur
