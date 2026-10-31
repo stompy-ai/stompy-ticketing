@@ -136,6 +136,7 @@ async def board_view(
                 status_filter=ticket_status,
                 include_terminal=include_terminal,
                 include_archived=include_archived,
+                fields="card",  # STOMPY-3284: the CLI door reads titles, not bodies
             )
         )
 

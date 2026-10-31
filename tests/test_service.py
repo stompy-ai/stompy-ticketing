@@ -20,6 +20,7 @@ from stompy_ticketing.models import (
     TicketUpdate,
     LinkType,
 )
+from tests.board_fake import board_conn
 from stompy_ticketing.service import (
     InvalidTransitionError,
     TicketService,
@@ -686,8 +687,7 @@ class TestBoardView:
             _make_ticket_row(id=1, status="backlog"),
             _make_ticket_row(id=2, status="in_progress"),
         ]
-        conn, cur = _mock_conn_and_cursor(rows=rows)
-        cur.fetchall.return_value = rows
+        conn, cur = board_conn(rows)
 
         result = self.service.board_view(conn, SCHEMA, type_filter="task", view="kanban")
 
@@ -706,8 +706,7 @@ class TestBoardView:
         rows = [
             _make_ticket_row(id=1, status="backlog", description=long_desc),
         ]
-        conn, cur = _mock_conn_and_cursor(rows=rows)
-        cur.fetchall.return_value = rows
+        conn, cur = board_conn(rows)
 
         result = self.service.board_view(conn, SCHEMA, view="kanban", limit=0)
 
@@ -722,8 +721,7 @@ class TestBoardView:
         rows = [
             _make_ticket_row(id=1, status="backlog", description=short_desc),
         ]
-        conn, cur = _mock_conn_and_cursor(rows=rows)
-        cur.fetchall.return_value = rows
+        conn, cur = board_conn(rows)
 
         result = self.service.board_view(conn, SCHEMA, view="kanban")
 
@@ -735,8 +733,7 @@ class TestBoardView:
             _make_ticket_row(id=1, status="triage"),
             _make_ticket_row(id=2, status="triage"),
         ]
-        conn, cur = _mock_conn_and_cursor(rows=rows)
-        cur.fetchall.return_value = rows
+        conn, cur = board_conn(rows)
 
         result = self.service.board_view(conn, SCHEMA, status_filter="triage")
 
@@ -751,8 +748,7 @@ class TestBoardView:
         rows = [
             _make_ticket_row(id=1, status="triage", type="bug"),
         ]
-        conn, cur = _mock_conn_and_cursor(rows=rows)
-        cur.fetchall.return_value = rows
+        conn, cur = board_conn(rows)
 
         result = self.service.board_view(
             conn, SCHEMA, type_filter="bug", status_filter="triage"
@@ -768,8 +764,7 @@ class TestBoardView:
         rows = [
             _make_ticket_row(id=1, status="backlog", description="A" * 500),
         ]
-        conn, cur = _mock_conn_and_cursor(rows=rows)
-        cur.fetchall.return_value = rows
+        conn, cur = board_conn(rows)
 
         result = self.service.board_view(conn, SCHEMA, view="detail", limit=0)
 

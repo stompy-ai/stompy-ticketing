@@ -212,9 +212,9 @@ class TestServiceUsesIdentifier:
         _assert_uses_identifier(cur, SAFE_SCHEMA)
 
     def test_board_view_kanban_uses_identifier(self):
-        rows = [_make_ticket_row()]
-        conn, cur = _mock_conn_and_cursor(rows=rows)
-        cur.fetchall.return_value = rows
+        from tests.board_fake import board_conn
+
+        conn, cur = board_conn([_make_ticket_row()])
 
         self.service.board_view(conn, SAFE_SCHEMA, view="kanban")
 
