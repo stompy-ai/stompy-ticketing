@@ -357,6 +357,7 @@ def register_ticketing_tools(
 
         Initial statuses: task→backlog, bug→triage, feature→proposed, decision→open.
         Terminal: task→done/cancelled, bug→resolved/wont_fix, feature→shipped/rejected, decision→decided/deferred.
+        Stalled in_progress steps back: task→backlog, bug→confirmed, feature→approved.
         Parked ("not now", every type): from backlog/triage/confirmed/proposed/approved/open, back in one step; hidden from the board like terminals; list with status='parked'."""
         _prefix_token = None
         try:
