@@ -199,7 +199,8 @@ class BoardMixin:
                 "SELECT COUNT(*) as count FROM {} WHERE archived_at IS NOT NULL"
             ).format(table),
         )
-        archived_count = cur.fetchone()["count"]
+        row = cur.fetchone()  # COUNT(*) always has a row on Postgres; a stub may not
+        archived_count = row["count"] if row else 0
 
         cur.execute(
             sql.SQL(

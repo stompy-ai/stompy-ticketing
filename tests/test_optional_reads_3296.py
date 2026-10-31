@@ -206,3 +206,24 @@ def test_the_catalog_lookup_is_parameterized():
 
     (text, params), = [(t, p) for t, p in cur.executed if "pg_catalog.pg_tables" in t]
     assert SCHEMA not in text and params == [SCHEMA, CTX]
+
+
+def test_a_count_that_returns_no_row_is_zero_archived_not_a_crash():
+    """The host's route fuzz stubs answer fetchone() with None. Postgres
+    always returns a row for COUNT(*), but the board read it as
+    fetchone()["count"] and 0.8.28 took away the swallow that hid it, so the
+    stubbed GET /projects/{name}/tickets answered 500."""
+    conn, cur = board_conn([_make_ticket_row(id=1)])
+    real = cur._execute
+
+    def no_row_for_the_archived_count(query, params=None):
+        real(query, params)
+        if "archived_at IS NOT NULL" in cur.executed[-1][0]:
+            cur._one = None
+
+    cur.execute.side_effect = no_row_for_the_archived_count
+
+    board = _service().board_view(conn, SCHEMA, fields="full")
+
+    assert [t.id for t in board.columns[0].tickets] == [1]
+    assert board.archived_count == 0
