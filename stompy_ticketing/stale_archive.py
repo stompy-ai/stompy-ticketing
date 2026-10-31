@@ -1,23 +1,24 @@
-"""Legacy stale-ticket sweep, and the one throttle every read runs it through.
+"""Legacy stale-ticket sweep, and the one throttle every read-path write runs through.
 
 The board, ticket list and ticket search sweep at most once per
 (database, schema) per process per SWEEP_INTERVAL_SECONDS (STOMPY-3284,
-STOMPY-3288). The sweep itself is one statement however many tickets it
-archives: the UPDATE's RETURNING feeds the history INSERT.
+STOMPY-3288). Search's NULL-tsvector backfill runs through the same throttle
+under its own key (STOMPY-3290). The sweep itself is one statement however
+many tickets it archives: the UPDATE's RETURNING feeds the history INSERT.
 """
 
 import time
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from psycopg2 import sql
 
-#: Reads sweep at most once per (database, schema) per this window.
+#: A read-path write runs at most once per (kind, database, schema) per this window.
 SWEEP_INTERVAL_SECONDS = 600
 
 _clock = time.monotonic
-# minimal: an unlocked dict; a race between two threads costs one extra sweep,
-# which is the pre-3284 behaviour. Bounded by the number of (database, schema) pairs.
-_last_sweep: Dict[Tuple[Any, str], float] = {}
+# minimal: an unlocked dict; a race between two threads costs one extra write,
+# which is the pre-3284 behaviour. Bounded by kinds x (database, schema) pairs.
+_last_sweep: Dict[Tuple[str, Any, str], float] = {}
 
 
 def _database(conn) -> Optional[Tuple[Any, Any, Any]]:
@@ -30,25 +31,30 @@ def _database(conn) -> Optional[Tuple[Any, Any, Any]]:
         return None
 
 
-def _sweep_due(conn, schema: str) -> bool:
+def run_if_due(kind: str, conn, schema: str, write: Callable[[], Any]) -> None:
+    """Run a read path's write at most once per (kind, database, schema) per
+    window, and never let it fail the read.
+
+    ``write`` returning exactly True means work remains (a full batch): the
+    window re-arms so the next read continues instead of waiting it out.
+    """
     database = _database(conn)
-    if database is None:
-        return True  # unknown database: never let a throttle skip a tenant's sweep
-    key, now = (database, schema), _clock()
-    last = _last_sweep.get(key)
-    if last is not None and now - last < SWEEP_INTERVAL_SECONDS:
-        return False
-    _last_sweep[key] = now  # an attempt counts: a failing sweep must not retry every read
-    return True
+    key, now = (kind, database, schema), _clock()
+    if database is not None:  # unknown database: never let a throttle skip a tenant
+        last = _last_sweep.get(key)
+        if last is not None and now - last < SWEEP_INTERVAL_SECONDS:
+            return
+        _last_sweep[key] = now  # an attempt counts: a failing write must not retry every read
+    try:
+        if write() is True:
+            _last_sweep.pop(key, None)
+    except Exception:
+        pass
 
 
 def sweep_if_due(service, conn, schema: str) -> None:
-    """The read paths' sweep: throttled, and never allowed to fail the read."""
-    if _sweep_due(conn, schema):
-        try:
-            service.archive_stale_tickets(conn, schema)
-        except Exception:
-            pass
+    """The read paths' stale sweep: throttled, and never allowed to fail the read."""
+    run_if_due("stale_sweep", conn, schema, lambda: service.archive_stale_tickets(conn, schema))
 
 
 def archive_stale(conn, schema, ttl_seconds, *, clock):
