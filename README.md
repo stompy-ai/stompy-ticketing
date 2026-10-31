@@ -103,6 +103,8 @@ backlog --> in_progress --> done
   +-> cancelled  +-> cancelled
 ```
 
+`in_progress --> backlog` steps a stalled start back.
+
 Initial: `backlog` | Terminal: `done`, `cancelled`
 
 ### bug
@@ -112,6 +114,8 @@ triage --> confirmed --> in_progress --> resolved
   |                          |
   +-> wont_fix               +-> wont_fix
 ```
+
+`in_progress --> confirmed` steps a stalled fix back.
 
 Initial: `triage` | Terminal: `resolved`, `wont_fix`
 
@@ -123,6 +127,8 @@ proposed --> approved --> in_progress --> shipped
   +-> rejected               +-> rejected
 ```
 
+`in_progress --> approved` steps a stalled build back.
+
 Initial: `proposed` | Terminal: `shipped`, `rejected`
 
 ### decision
@@ -132,6 +138,8 @@ open --> decided
   |
   +-> deferred --> open (reopen)
 ```
+
+decision has no `in_progress` state.
 
 Initial: `open` | Terminal: `decided`, `deferred`
 

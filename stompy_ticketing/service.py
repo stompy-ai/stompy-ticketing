@@ -101,7 +101,7 @@ STATE_MACHINES: Dict[str, Dict[str, Any]] = {
         "terminal": ["done", "cancelled"],
         "transitions": {
             "backlog": ["in_progress", "done", "cancelled", PARKED],
-            "in_progress": ["done", "cancelled"],
+            "in_progress": ["done", "cancelled", "backlog"],  # backlog: a stalled start steps back
             "done": ["backlog"],
             "cancelled": ["backlog"],
             PARKED: ["backlog"],
@@ -113,7 +113,7 @@ STATE_MACHINES: Dict[str, Dict[str, Any]] = {
         "transitions": {
             "triage": ["confirmed", "wont_fix", PARKED],
             "confirmed": ["in_progress", PARKED],
-            "in_progress": ["resolved", "wont_fix"],
+            "in_progress": ["resolved", "wont_fix", "confirmed"],
             "resolved": ["triage"],
             "wont_fix": ["triage"],
             PARKED: ["triage", "confirmed"],
@@ -125,7 +125,7 @@ STATE_MACHINES: Dict[str, Dict[str, Any]] = {
         "transitions": {
             "proposed": ["approved", "rejected", PARKED],
             "approved": ["in_progress", PARKED],
-            "in_progress": ["shipped", "rejected"],
+            "in_progress": ["shipped", "rejected", "approved"],
             "shipped": ["proposed"],
             "rejected": ["proposed"],
             PARKED: ["proposed", "approved"],
