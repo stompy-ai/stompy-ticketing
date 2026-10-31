@@ -6,13 +6,20 @@ doors) ships description_preview and no body; fields="full" (the host's web
 door, whose detail dialog renders the board row, STOMPY-1519) ships the body
 whole. The legacy stale-archive sweep runs through stale_archive.sweep_if_due,
 the throttle the board shares with ticket list and search.
+
+Card links (also 3284): every full link row repeats source, target AND peer
+title, and a context-link row repeats the card's own title, so on a real
+board links outweighed everything else. A card carries CardLinks and context
+labels instead, at most BOARD_CARD_LINK_CAP of each, blockers first and open
+peers before closed ones, with links_total / context_links_total set when
+capped. The full rows stay one ticket(get) or ticket_link(list) away.
 """
 
 from typing import Any, Dict, List, Optional
 
 from psycopg2 import sql
 
-from stompy_ticketing.models import BoardColumn, BoardView, CompactTicket
+from stompy_ticketing.models import BoardColumn, BoardView, CardLink, CompactTicket
 from stompy_ticketing.stale_archive import sweep_if_due
 
 #: What row_to_response + the preview read (ticket_projection.py, leases.py).
@@ -27,9 +34,34 @@ _PRIORITY_RANK = sql.SQL(
     "CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 "
     "WHEN 'low' THEN 3 ELSE 4 END"
 )
+#: Card link order: what blocks this card, what it blocks, then structure.
+_RELATION_RANK = {"blocked_by": 0, "blocks": 1, "parent": 2, "duplicate": 3, "related": 4}
+
+
+def _card_links(ticket, cap: int, closed) -> None:
+    """Replace a card's full link rows with CardLinks and labels, capped."""
+    links = sorted(
+        ticket.links,
+        key=lambda l: (_RELATION_RANK.get(l.relation, len(_RELATION_RANK)),
+                       l.peer_status in closed, -l.peer_id),
+    )
+    ticket.links = [
+        CardLink(peer_id=l.peer_id, relation=l.relation, direction=l.direction,
+                 peer_status=l.peer_status)
+        for l in links[:cap]
+    ]
+    if len(links) > cap:
+        ticket.links_total = len(links)
+    labels = list(dict.fromkeys(c.context_label for c in ticket.context_links))
+    ticket.context_links = labels[:cap]
+    if len(labels) > cap:
+        ticket.context_links_total = len(labels)
 
 
 class BoardMixin:
+    #: Links of each kind on one board card; a hub ticket carries hundreds.
+    BOARD_CARD_LINK_CAP = 20
+
     def board_view(
         self,
         conn,
@@ -197,10 +229,13 @@ class BoardMixin:
                     )
                 except Exception:
                     link_map, ctx_link_map = {}, {}
+                closed = set(get_hidden_statuses(None))
                 for col in columns:
                     for t in col.tickets:
                         t.links = link_map.get(t.id, [])
                         t.context_links = ctx_link_map.get(t.id, [])
+                        if fields == "card":
+                            _card_links(t, self.BOARD_CARD_LINK_CAP, closed)
 
         return BoardView(
             columns=columns,
