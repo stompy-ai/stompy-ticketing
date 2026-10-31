@@ -51,3 +51,35 @@ def status_change(ticket):
         "closed_at": ticket.closed_at,
         "updated_at": ticket.updated_at,
     }
+
+
+#: How much of an appended section its history row keeps on the MCP get door.
+APPENDED_HEAD_CHARS = 100
+_ELLIPSIS = "..."
+
+
+def get_view(ticket):
+    """The MCP get door's record, each fact once (STOMPY-3293). In place: the
+    record is the one get_ticket just built for this call.
+
+    - a description_appended row keeps the section's length and its first
+      APPENDED_HEAD_CHARS characters; the whole section is in description;
+    - a ticket-link row keeps ids, direction, relation and peer_*, not the
+      source/target title and status pairs (one of them is this ticket, the
+      other is peer_* again);
+    - a context-link row drops ticket_title / ticket_status, this ticket's.
+    The REST detail keeps the whole shape.
+    """
+    for h in ticket.history:
+        if h.field_name == "description_appended" and h.new_value is not None:
+            h.new_value_chars = len(h.new_value)
+            if len(h.new_value) > APPENDED_HEAD_CHARS:
+                h.new_value = h.new_value[:APPENDED_HEAD_CHARS] + _ELLIPSIS
+    for link in ticket.links:
+        if getattr(link, "peer_id", None) is not None:
+            link.source_title = link.source_status = None
+            link.target_title = link.target_status = None
+    for c in ticket.context_links:
+        if not isinstance(c, str):
+            c.ticket_title = c.ticket_status = None
+    return ticket
