@@ -190,11 +190,12 @@ DB = {"host": "h", "port": "5432", "dbname": "d"}
 
 
 class TestStaleSweepIsThrottled:
-    def _board_module(self):
-        return importlib.import_module("stompy_ticketing.board_view")
+    def _throttle_module(self):
+        # The throttle the board shares with list and search (STOMPY-3288).
+        return importlib.import_module("stompy_ticketing.stale_archive")
 
     def test_second_board_read_within_the_window_does_not_sweep(self):
-        mod = self._board_module()
+        mod = self._throttle_module()
         svc = _service()
         with patch.object(mod, "_last_sweep", {}), patch.object(mod, "_clock", return_value=1000.0):
             svc.board_view(_conn([], dsn=DB)[0], SCHEMA, view="summary")
@@ -202,7 +203,7 @@ class TestStaleSweepIsThrottled:
         assert svc.archive_stale_tickets.call_count == 1
 
     def test_board_read_after_the_window_sweeps_again(self):
-        mod = self._board_module()
+        mod = self._throttle_module()
         svc = _service()
         with patch.object(mod, "_last_sweep", {}), patch.object(mod, "_clock") as clock:
             clock.return_value = 1000.0
@@ -216,7 +217,7 @@ class TestStaleSweepIsThrottled:
     def test_window_is_per_schema_and_per_database(self):
         """Tenants have their own Neon databases with same-named schemas: one
         tenant's sweep must not suppress another's."""
-        mod = self._board_module()
+        mod = self._throttle_module()
         svc = _service()
         other_db = {"host": "tenant-neon", "port": "5432", "dbname": "d"}
         with patch.object(mod, "_last_sweep", {}), patch.object(mod, "_clock", return_value=1000.0):
@@ -226,7 +227,7 @@ class TestStaleSweepIsThrottled:
         assert svc.archive_stale_tickets.call_count == 3
 
     def test_a_failing_sweep_never_fails_the_board(self):
-        mod = self._board_module()
+        mod = self._throttle_module()
         svc = _service()
         svc.archive_stale_tickets.side_effect = RuntimeError("read-only replica")
         with patch.object(mod, "_last_sweep", {}), patch.object(mod, "_clock", return_value=1000.0):

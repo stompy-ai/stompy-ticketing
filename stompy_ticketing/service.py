@@ -16,6 +16,7 @@ from psycopg2 import IntegrityError, sql
 from stompy_ticketing.archival import ArchiveMixin
 from stompy_ticketing.board_view import BoardMixin
 from stompy_ticketing.duplicates import content_hash as duplicate_content_hash
+from stompy_ticketing.stale_archive import sweep_if_due
 
 from stompy_ticketing.models import (
     BatchItemResult,
@@ -918,11 +919,7 @@ class TicketService(ArchiveMixin, BoardMixin):
         if filters is None:
             filters = TicketListFilters()
 
-        # Lazy archive trigger
-        try:
-            self.archive_stale_tickets(conn, schema)
-        except Exception:
-            pass  # Archive failure should not break list
+        sweep_if_due(self, conn, schema)  # throttled, never fails the read (3288)
 
         cur = conn.cursor()
         where_clauses: List[str] = []
@@ -1145,11 +1142,7 @@ class TicketService(ArchiveMixin, BoardMixin):
         Returns:
             Search results ranked by relevance.
         """
-        # Lazy archive trigger
-        try:
-            self.archive_stale_tickets(conn, schema)
-        except Exception:
-            pass
+        sweep_if_due(self, conn, schema)  # throttled, never fails the read (3288)
 
         # Lazy backfill for NULL tsvectors (handles pre-trigger tickets)
         try:

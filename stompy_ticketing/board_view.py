@@ -4,24 +4,16 @@ The per-column limit is a row_number() window, the column counts come from
 one GROUP BY, and the row query names its columns. fields="card" (the agent
 doors) ships description_preview and no body; fields="full" (the host's web
 door, whose detail dialog renders the board row, STOMPY-1519) ships the body
-whole. The legacy stale-archive sweep still runs from the board, at most once
-per database and schema per process per SWEEP_INTERVAL_SECONDS.
+whole. The legacy stale-archive sweep runs through stale_archive.sweep_if_due,
+the throttle the board shares with ticket list and search.
 """
 
-import time
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from psycopg2 import sql
 
 from stompy_ticketing.models import BoardColumn, BoardView, CompactTicket
-
-#: The board's stale sweep runs at most once per (database, schema) per this window.
-SWEEP_INTERVAL_SECONDS = 600
-
-_clock = time.monotonic
-# minimal: an unlocked dict; a race between two threads costs one extra sweep,
-# which is the pre-3284 behaviour. Bounded by the number of (database, schema) pairs.
-_last_sweep: Dict[Tuple[Any, str], float] = {}
+from stompy_ticketing.stale_archive import sweep_if_due
 
 #: What row_to_response + the preview read (ticket_projection.py, leases.py).
 CARD_COLUMNS = (
@@ -35,28 +27,6 @@ _PRIORITY_RANK = sql.SQL(
     "CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'medium' THEN 2 "
     "WHEN 'low' THEN 3 ELSE 4 END"
 )
-
-
-def _database(conn) -> Optional[Tuple[Any, Any, Any]]:
-    """Which database this connection is on: tenants have their own Neon
-    databases with same-named schemas, so a schema alone is not a key."""
-    try:
-        params = conn.get_dsn_parameters()
-        return (params.get("host"), params.get("port"), params.get("dbname"))
-    except Exception:
-        return None
-
-
-def _sweep_due(conn, schema: str) -> bool:
-    database = _database(conn)
-    if database is None:
-        return True  # unknown database: never let a throttle skip a tenant's sweep
-    key, now = (database, schema), _clock()
-    last = _last_sweep.get(key)
-    if last is not None and now - last < SWEEP_INTERVAL_SECONDS:
-        return False
-    _last_sweep[key] = now  # an attempt counts: a failing sweep must not retry every read
-    return True
 
 
 class BoardMixin:
@@ -90,11 +60,7 @@ class BoardMixin:
         if fields not in ("card", "full"):
             raise ValueError(f"fields must be 'card' or 'full', not {fields!r}")
 
-        if _sweep_due(conn, schema):
-            try:
-                self.archive_stale_tickets(conn, schema)
-            except Exception:
-                pass
+        sweep_if_due(self, conn, schema)
 
         cur = conn.cursor()
         conditions: List[str] = []

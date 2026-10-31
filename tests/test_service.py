@@ -1411,8 +1411,9 @@ class TestArchiveStaleTickets:
 
         self.service.archive_stale_tickets(conn, SCHEMA)
 
-        # Should have: 1 UPDATE (batch) + 1 INSERT history
-        assert cur.execute.call_count >= 2
+        # One statement: the UPDATE's RETURNING feeds the history INSERT (3288)
+        assert cur.execute.call_count == 1
+        assert "ticket_history" in _sql_to_str(cur.execute.call_args_list[0][0][0])
 
     @patch("stompy_ticketing.service.time")
     def test_rollback_on_error(self, mock_time):
