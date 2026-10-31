@@ -13,6 +13,7 @@ under a data name. The card gets its own field instead.
 from unittest.mock import MagicMock
 
 from stompy_ticketing.service import TicketService
+from tests.board_fake import board_conn
 
 FIXED_TIME = 1700000000.0
 SCHEMA = "test_project"
@@ -44,14 +45,9 @@ def _row(id=1, description=LONG, status="backlog"):
 
 
 def _conn(rows):
-    conn = MagicMock()
-    cur = MagicMock()
-    conn.cursor.return_value = cur
-    cur.fetchall.return_value = rows
-    # Consistent with the rows we hand back — a fixture that lies about
-    # totals can mask a metadata bug (Kimi #25).
-    cur.fetchone.return_value = {"count": len(rows)}
-    return conn
+    # STOMPY-3284: limit and counts live in SQL; the fake answers both from
+    # these rows, so totals cannot lie (Kimi #25).
+    return board_conn(rows)[0]
 
 
 def _first(board):

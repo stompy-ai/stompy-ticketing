@@ -171,11 +171,11 @@ class TestBug151TruncatedCount:
 
     def test_board_view_kanban_column_reports_truncated_count(self):
         # 12 backlog rows, default kanban limit is 10 → 2 truncated.
-        from tests.test_service import _make_ticket_row, _mock_conn_and_cursor
+        from tests.board_fake import board_conn
+        from tests.test_service import _make_ticket_row
 
         rows = [_make_ticket_row(id=i, status="backlog") for i in range(1, 13)]
-        conn, cur = _mock_conn_and_cursor(rows=rows)
-        cur.fetchall.return_value = rows
+        conn, cur = board_conn(rows)
 
         svc = TicketService()
         result = svc.board_view(conn, SCHEMA, view="kanban")
@@ -187,11 +187,11 @@ class TestBug151TruncatedCount:
         assert backlog_col.has_more is True
 
     def test_board_view_no_truncation_when_within_limit(self):
-        from tests.test_service import _make_ticket_row, _mock_conn_and_cursor
+        from tests.board_fake import board_conn
+        from tests.test_service import _make_ticket_row
 
         rows = [_make_ticket_row(id=i, status="backlog") for i in range(1, 4)]
-        conn, cur = _mock_conn_and_cursor(rows=rows)
-        cur.fetchall.return_value = rows
+        conn, cur = board_conn(rows)
 
         svc = TicketService()
         result = svc.board_view(conn, SCHEMA, view="kanban")
@@ -251,21 +251,13 @@ class TestBug133BoardRetry:
 
 class TestBug173BoardLinks:
     def test_board_view_populates_links_on_visible_cards(self):
-        from tests.test_service import _make_ticket_row, _mock_conn_and_cursor
+        from tests.board_fake import board_conn
+        from tests.test_service import _make_ticket_row
 
         rows = [
             _make_ticket_row(id=10, status="backlog"),
             _make_ticket_row(id=11, status="backlog"),
         ]
-        conn, cur = _mock_conn_and_cursor(rows=rows)
-
-        # Provide rows for: archive trigger SELECT, archived count SELECT,
-        # main board SELECT, ticket_links bulk SELECT, ticket_context_links bulk SELECT
-        # The archive trigger fetches rows; we fall through with empty fetchall by default.
-        # We need fetchall to return:
-        #   - main board rows (for the main SELECT *)
-        #   - bulk links rows
-        #   - bulk context_links rows
         link_row = {
             "id": 1, "source_id": 10, "target_id": 99,
             "link_type": "blocks", "created_at": FIXED_TIME,
@@ -277,14 +269,9 @@ class TestBug173BoardLinks:
             "created_at": FIXED_TIME,
             "ticket_title": "Foo", "ticket_status": "backlog",
         }
-        # Sequence of fetchall returns:
-        # 1. archive_stale_tickets stale rows -> []
-        # 2. main board rows -> rows
-        # 3. bulk link fetch -> [link_row]
-        # 4. bulk context_link fetch -> [ctx_link_row]
-        cur.fetchall.side_effect = [[], rows, [link_row], [ctx_link_row]]
-        # archived_count fetchone returns 0
-        cur.fetchone.return_value = {"count": 0}
+        conn, cur = board_conn(
+            rows, link_rows={"ticket_links": [link_row], "context_links": [ctx_link_row]}
+        )
 
         svc = TicketService()
         result = svc.board_view(conn, SCHEMA, view="kanban")
@@ -304,20 +291,19 @@ class TestBug173BoardLinks:
 
     def test_compact_view_skips_link_fetch(self):
         # Compact tickets are intentionally minimal — no link fetch.
-        from tests.test_service import _make_ticket_row, _mock_conn_and_cursor
+        from tests.board_fake import board_conn
+        from tests.test_service import _make_ticket_row
 
         rows = [_make_ticket_row(id=1, status="backlog")]
-        conn, cur = _mock_conn_and_cursor(rows=rows)
-        cur.fetchall.side_effect = [[], rows]
-        cur.fetchone.return_value = {"count": 0}
+        conn, cur = board_conn(rows)
 
         svc = TicketService()
         result = svc.board_view(conn, SCHEMA, view="compact")
 
-        # Should succeed without consuming extra fetchall results
         assert result.total == 1
-        # Only 2 fetchall calls: archive stale + main board (no link fetch)
-        assert cur.fetchall.call_count == 2
+        # No link fetch: archive stale + column counts + main board only.
+        assert not any("links" in t for t, _ in cur.executed)
+        assert cur.fetchall.call_count == 3
 
 
 # --------------------------------------------------------------------------- #

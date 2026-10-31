@@ -7,6 +7,7 @@ compact view mode to keep MCP responses under size limits.
 from unittest.mock import MagicMock
 
 from stompy_ticketing.service import TicketService
+from tests.board_fake import board_conn
 
 FIXED_TIME = 1700000000.0
 SCHEMA = "test_project"
@@ -50,17 +51,10 @@ def _make_ticket_row(
     }
 
 
-def _mock_conn_and_cursor(rows=None):
-    conn = MagicMock()
-    cur = MagicMock()
-    conn.cursor.return_value = cur
-    if rows is not None:
-        cur.fetchall.return_value = rows
-    else:
-        cur.fetchall.return_value = []
-    # archived_count query
-    cur.fetchone.return_value = {"count": 0}
-    return conn, cur
+def _mock_conn_and_cursor(rows=None, counts=None):
+    # STOMPY-3284: the board's limit and counts live in SQL, so the cursor
+    # has to answer them the way Postgres would.
+    return board_conn(rows or [], counts=counts)
 
 
 class TestBoardPaginationLimit:
@@ -152,11 +146,7 @@ class TestBoardPaginationLimit:
 
     def test_summary_view_unaffected_by_limit(self):
         """Summary view returns counts only, limit is ignored."""
-        conn, cur = _mock_conn_and_cursor()
-        cur.fetchall.return_value = [
-            {"status": "backlog", "count": 50},
-            {"status": "in_progress", "count": 20},
-        ]
+        conn, cur = _mock_conn_and_cursor(counts={"backlog": 50, "in_progress": 20})
 
         result = self.service.board_view(conn, SCHEMA, view="summary", limit=5)
 

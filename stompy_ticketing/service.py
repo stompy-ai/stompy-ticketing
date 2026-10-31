@@ -14,14 +14,12 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 from psycopg2 import IntegrityError, sql
 from stompy_ticketing.archival import ArchiveMixin
+from stompy_ticketing.board_view import BoardMixin
 from stompy_ticketing.duplicates import content_hash as duplicate_content_hash
 
 from stompy_ticketing.models import (
     BatchItemResult,
     BatchOperationResult,
-    BoardColumn,
-    BoardView,
-    CompactTicket,
     ContextLinkCreate,
     LinkType,
     ContextLinkResponse,
@@ -366,7 +364,7 @@ class DBConnection(Protocol):
 # =========================================================================== #
 
 
-class TicketService(ArchiveMixin):
+class TicketService(ArchiveMixin, BoardMixin):
     """Business logic for ticket operations.
 
     Takes a database connection and schema as parameters (dependency injection).
@@ -1218,7 +1216,8 @@ class TicketService(ArchiveMixin):
         )
 
     # Card-excerpt length for board responses (chars). This bounds
-    # description_preview ONLY — `description` itself always travels whole.
+    # description_preview ONLY — `description` is never cut: it travels whole
+    # or (board fields="card", STOMPY-3284) not at all.
     BOARD_DESC_MAX_LENGTH = 100
 
     # Default limit per column in kanban/compact views.
@@ -1250,7 +1249,9 @@ class TicketService(ArchiveMixin):
         """Set a bounded card excerpt WITHOUT ever mutating `description`.
 
         Contract, in full:
-          * description is never modified — board rows carry it whole.
+          * description is never cut — it is whole here; a card board
+            (fields="card", STOMPY-3284) drops it to None afterwards, from
+            a LEFT(description, cutoff + 1) prefix that decides the same.
           * description_preview is always set on board responses when there
             IS a description; it equals description when nothing was cut.
           * a None or empty description leaves description_preview None.
@@ -1271,270 +1272,6 @@ class TicketService(ArchiveMixin):
             )
         else:
             ticket.description_preview = ticket.description
-
-    def board_view(
-        self,
-        conn: DBConnection,
-        schema: str,
-        type_filter: Optional[str] = None,
-        view: str = "kanban",
-        status_filter: Optional[str] = None,
-        include_terminal: bool = False,
-        include_archived: bool = False,
-        limit: Optional[int] = None,
-    ) -> BoardView:
-        """Get a kanban board view of tickets grouped by status.
-
-        Args:
-            conn: Database connection.
-            schema: PostgreSQL schema name.
-            type_filter: Filter by ticket type.
-            view: "kanban" (tickets with truncated descriptions),
-                  "summary" (counts only), "compact" (id/title/priority only),
-                  or "detail" (alias for kanban).
-            status_filter: Filter by status (e.g., "triage", "backlog").
-            include_terminal: Include terminal statuses (default False).
-            include_archived: Include archived tickets (default False).
-            limit: Max tickets per column (default 10 for kanban/compact).
-                   Use 0 for unlimited.
-
-        Returns:
-            Board view with columns.
-        """
-        # Lazy archive trigger
-        try:
-            self.archive_stale_tickets(conn, schema)
-        except Exception:
-            pass
-
-        cur = conn.cursor()
-        conditions: List[str] = []
-        params: List[Any] = []
-
-        if not include_archived:
-            conditions.append("archived_at IS NULL")
-
-        if type_filter:
-            conditions.append("type = %s")
-            params.append(type_filter)
-
-        if status_filter:
-            # Explicit status filter — don't add terminal exclusion
-            conditions.append("status = %s")
-            params.append(status_filter)
-        elif not include_terminal:
-            # Exclude terminal statuses AND parked (STOMPY-1746): neither is
-            # queue. include_terminal=True shows both.
-            hidden = get_hidden_statuses(type_filter)
-            placeholders = ", ".join(["%s"] * len(hidden))
-            conditions.append(f"status NOT IN ({placeholders})")
-            params.extend(hidden)
-
-        where_sql = f"WHERE {' AND '.join(conditions)}" if conditions else ""
-
-        # Get archived count for display
-        archived_count = 0
-        try:
-            cur.execute(
-                sql.SQL(
-                    "SELECT COUNT(*) as count FROM {}.tickets WHERE archived_at IS NOT NULL"
-                ).format(sql.Identifier(schema)),
-            )
-            archived_count = cur.fetchone()["count"]
-        except Exception:
-            pass
-
-        if view == "summary":
-            cur.execute(
-                sql.SQL("""
-                SELECT status, COUNT(*) as count
-                FROM {}.tickets {}
-                GROUP BY status ORDER BY status
-                """).format(sql.Identifier(schema), sql.SQL(where_sql)),
-                params,
-            )
-            rows = cur.fetchall()
-            columns = [
-                BoardColumn(status=r["status"], count=r["count"], tickets=[])
-                for r in rows
-            ]
-            total = sum(r["count"] for r in rows)
-        else:
-            # Kanban / compact / detail — get tickets grouped by status
-            is_compact = view == "compact"
-
-            # Determine effective limit per column
-            if limit is not None:
-                effective_limit = None if limit == 0 else max(1, limit)
-            else:
-                effective_limit = self.BOARD_DEFAULT_LIMIT
-
-            # For compact view, only fetch needed columns
-            if is_compact:
-                select_cols = "id, title, type, status, priority, assignee"
-            else:
-                select_cols = "*"
-
-            cur.execute(
-                sql.SQL("""
-                SELECT {} FROM {}.tickets {}
-                ORDER BY
-                    CASE priority
-                        WHEN 'urgent' THEN 0
-                        WHEN 'high' THEN 1
-                        WHEN 'medium' THEN 2
-                        WHEN 'low' THEN 3
-                        ELSE 4
-                    END,
-                    updated_at DESC
-                """).format(
-                    sql.SQL(select_cols),
-                    sql.Identifier(schema),
-                    sql.SQL(where_sql),
-                ),
-                params,
-            )
-            rows = cur.fetchall()
-
-            # Group by status
-            status_groups: Dict[str, List] = {}
-            for r in rows:
-                status = r["status"]
-                if status not in status_groups:
-                    status_groups[status] = []
-                status_groups[status].append(r)
-
-            # Build ordered columns based on type's state machine
-            if type_filter and type_filter in STATE_MACHINES:
-                ordered_statuses = list(STATE_MACHINES[type_filter]["transitions"].keys())
-            else:
-                ordered_statuses = sorted(status_groups.keys())
-
-            columns = []
-            for status in ordered_statuses:
-                group_rows = status_groups.get(status, [])
-                total_in_col = len(group_rows)
-                # Apply per-column limit
-                if effective_limit is not None:
-                    visible_rows = group_rows[:effective_limit]
-                else:
-                    visible_rows = group_rows
-                has_more = total_in_col > len(visible_rows)
-
-                if is_compact:
-                    compact_tickets = [
-                        CompactTicket(
-                            id=r["id"],
-                            title=r["title"],
-                            type=r["type"],
-                            status=r["status"],
-                            priority=r["priority"],
-                            assignee=r.get("assignee"),
-                        )
-                        for r in visible_rows
-                    ]
-                    columns.append(
-                        BoardColumn(
-                            status=status,
-                            count=total_in_col,
-                            compact_tickets=compact_tickets,
-                            has_more=has_more,
-                            truncated_count=total_in_col - len(visible_rows),
-                        )
-                    )
-                else:
-                    tickets = []
-                    for r in visible_rows:
-                        ticket = self._row_to_response(r)
-                        self._attach_card_preview(ticket)
-                        tickets.append(ticket)
-                    columns.append(
-                        BoardColumn(
-                            status=status,
-                            count=total_in_col,
-                            tickets=tickets,
-                            has_more=has_more,
-                            truncated_count=total_in_col - len(visible_rows),
-                        )
-                    )
-
-            # Add any statuses not in the ordered list
-            for status in status_groups:
-                if status not in ordered_statuses:
-                    group_rows = status_groups[status]
-                    total_in_col = len(group_rows)
-                    if effective_limit is not None:
-                        visible_rows = group_rows[:effective_limit]
-                    else:
-                        visible_rows = group_rows
-                    has_more = total_in_col > len(visible_rows)
-
-                    if is_compact:
-                        compact_tickets = [
-                            CompactTicket(
-                                id=r["id"],
-                                title=r["title"],
-                                type=r["type"],
-                                status=r["status"],
-                                priority=r["priority"],
-                                assignee=r.get("assignee"),
-                            )
-                            for r in visible_rows
-                        ]
-                        columns.append(
-                            BoardColumn(
-                                status=status,
-                                count=total_in_col,
-                                compact_tickets=compact_tickets,
-                                has_more=has_more,
-                                truncated_count=total_in_col - len(visible_rows),
-                            )
-                        )
-                    else:
-                        tickets = []
-                        for r in visible_rows:
-                            ticket = self._row_to_response(r)
-                            self._attach_card_preview(ticket)
-                            tickets.append(ticket)
-                        columns.append(
-                            BoardColumn(
-                                status=status,
-                                count=total_in_col,
-                                tickets=tickets,
-                                has_more=has_more,
-                                truncated_count=total_in_col - len(visible_rows),
-                            )
-                        )
-
-            total = len(rows)
-
-            # Bug #173: populate per-card links on kanban view (not compact/summary).
-            # Single bulk query for all visible ticket IDs avoids N+1.
-            if not is_compact:
-                visible_ids = [t.id for col in columns for t in col.tickets]
-                if visible_ids:
-                    try:
-                        link_map = self._get_links_for_tickets_bulk(cur, schema, visible_ids)
-                        ctx_link_map = self._get_context_links_for_tickets_bulk(
-                            cur, schema, visible_ids
-                        )
-                    except Exception:
-                        link_map = {}
-                        ctx_link_map = {}
-                    for col in columns:
-                        for t in col.tickets:
-                            t.links = link_map.get(t.id, [])
-                            t.context_links = ctx_link_map.get(t.id, [])
-
-        return BoardView(
-            columns=columns,
-            total=total,
-            type_filter=type_filter,
-            include_archived=include_archived,
-            archived_count=archived_count,
-            view=view,
-            limit_per_column=effective_limit if view != "summary" else None,
-        )
 
     # --- Batch operations --- #
 

@@ -863,7 +863,7 @@ def register_ticketing_tools(
     async def ticket_board(
         view: Annotated[
             Literal["kanban", "summary", "compact"],
-            "kanban=full tickets; summary=counts only; compact=id+title+priority",
+            "kanban=cards with description_preview (full text: ticket get); summary=counts only; compact=id+title+priority",
         ] = "kanban",
         type: Annotated[
             Optional[Literal["task", "bug", "feature", "decision"]],
@@ -901,6 +901,7 @@ def register_ticketing_tools(
                             include_terminal=include_terminal,
                             include_archived=include_archived,
                             limit=limit,
+                            fields="card",  # STOMPY-3284: preview, not the body
                         )
                         return _safe_json(result)
                 except _OperationalError as op_err:
