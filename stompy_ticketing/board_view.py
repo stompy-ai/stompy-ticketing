@@ -18,6 +18,13 @@ Named columns tolerate an older table (also 3284): created_by and the lease
 columns are host deltas, and a schema that predates them has no such column,
 where SELECT * never cared. The row query reads the table's real columns once
 per (database, schema) and selects an absent one as NULL.
+
+No swallowed statement (STOMPY-3296): on Postgres a failed statement aborts
+the transaction, so `except: pass` around a read answered and left the
+caller's connection failing its NEXT statement. The one absence tolerated,
+a schema predating ticket_context_links (migration 32), is asked of the
+catalog per (database, schema) and the read skipped there; any other failure
+raises its own error to the door's catch-all.
 """
 
 import time
@@ -68,6 +75,36 @@ def _ticket_columns(conn, cur, schema: str) -> Optional[FrozenSet[str]]:
     if database is not None:
         complete = found.issuperset(CARD_COLUMNS)
         _table_columns[key] = (found, None if complete else now + SWEEP_INTERVAL_SECONDS)
+    return found
+
+
+#: (database, schema) -> (ticket_context_links exists, re-read deadline or None).
+_context_links_present: Dict[Tuple[Any, str], Tuple[bool, Optional[float]]] = {}
+
+
+def context_links_present(conn, cur, schema: str) -> bool:
+    """Whether the schema has ticket_context_links (migration 32). Present is
+    cached for good; absent is re-read after SWEEP_INTERVAL_SECONDS, like an
+    incomplete tickets table. A catalog that does not answer True/False
+    counts as present: the read then runs, as before."""
+    database = _database(conn)
+    key, now = (database, schema), time.monotonic()
+    hit = _context_links_present.get(key) if database is not None else None
+    if hit and (hit[1] is None or now < hit[1]):
+        return hit[0]
+    cur.execute(
+        sql.SQL(
+            "SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_tables "
+            "WHERE schemaname = %s AND tablename = %s) AS present"
+        ),
+        (schema, "ticket_context_links"),
+    )
+    row = cur.fetchone()
+    found = row.get("present") if isinstance(row, dict) else None
+    if found is not True and found is not False:
+        return True
+    if database is not None:
+        _context_links_present[key] = (found, None if found else now + SWEEP_INTERVAL_SECONDS)
     return found
 
 
@@ -157,16 +194,12 @@ class BoardMixin:
         where = sql.SQL(f"WHERE {' AND '.join(conditions)}" if conditions else "")
         table = sql.SQL("{}.tickets").format(sql.Identifier(schema))
 
-        archived_count = 0
-        try:
-            cur.execute(
-                sql.SQL(
-                    "SELECT COUNT(*) as count FROM {} WHERE archived_at IS NOT NULL"
-                ).format(table),
-            )
-            archived_count = cur.fetchone()["count"]
-        except Exception:
-            pass
+        cur.execute(
+            sql.SQL(
+                "SELECT COUNT(*) as count FROM {} WHERE archived_at IS NOT NULL"
+            ).format(table),
+        )
+        archived_count = cur.fetchone()["count"]
 
         cur.execute(
             sql.SQL(
@@ -267,13 +300,11 @@ class BoardMixin:
         if not is_compact:
             visible_ids = [t.id for col in columns for t in col.tickets]
             if visible_ids:
-                try:
-                    link_map = self._get_links_for_tickets_bulk(cur, schema, visible_ids)
-                    ctx_link_map = self._get_context_links_for_tickets_bulk(
-                        cur, schema, visible_ids
-                    )
-                except Exception:
-                    link_map, ctx_link_map = {}, {}
+                link_map = self._get_links_for_tickets_bulk(cur, schema, visible_ids)
+                ctx_link_map = (
+                    self._get_context_links_for_tickets_bulk(cur, schema, visible_ids)
+                    if context_links_present(conn, cur, schema) else {}
+                )
                 closed = set(get_hidden_statuses(None))
                 for col in columns:
                     for t in col.tickets:

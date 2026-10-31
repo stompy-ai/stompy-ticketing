@@ -115,6 +115,11 @@ def _make_link_row(
     }
 
 
+#: The archived COUNT's row. A COUNT always answers on Postgres; mocks that
+#: answered None only passed while board_view swallowed the TypeError (3296).
+ARCHIVED_NONE = {"count": 0}
+
+
 def _mock_conn_and_cursor(rows=None, fetchone_value=None):
     """Create a mock connection and cursor.
 
@@ -259,8 +264,9 @@ class TestGetTicket:
         history = [_make_history_row()]
         links = []
         conn, cur = _mock_conn_and_cursor(fetchone_value=row)
-        # First fetchall is history, second is links
-        cur.fetchall.side_effect = [history, links]
+        # history, links, context links (STOMPY-3296: the third read used to
+        # raise StopIteration into a swallowing except)
+        cur.fetchall.side_effect = [history, links, []]
 
         result = self.service.get_ticket(conn, SCHEMA, 1)
 
@@ -671,7 +677,7 @@ class TestBoardView:
         self.service = TicketService()
 
     def test_summary_view(self):
-        conn, cur = _mock_conn_and_cursor()
+        conn, cur = _mock_conn_and_cursor(fetchone_value=ARCHIVED_NONE)
         cur.fetchall.return_value = [
             {"status": "backlog", "count": 3},
             {"status": "in_progress", "count": 1},
@@ -1531,7 +1537,7 @@ class TestBoardViewTerminalFilter:
         self.service.archive_stale_tickets = MagicMock(return_value=0)
 
     def test_excludes_terminal_statuses_by_default(self):
-        conn, cur = _mock_conn_and_cursor()
+        conn, cur = _mock_conn_and_cursor(fetchone_value=ARCHIVED_NONE)
         cur.fetchall.return_value = [
             {"status": "backlog", "count": 3},
             {"status": "in_progress", "count": 1},
@@ -1543,7 +1549,7 @@ class TestBoardViewTerminalFilter:
         assert "status NOT IN" in executed_sql
 
     def test_includes_terminal_when_requested(self):
-        conn, cur = _mock_conn_and_cursor()
+        conn, cur = _mock_conn_and_cursor(fetchone_value=ARCHIVED_NONE)
         cur.fetchall.return_value = [
             {"status": "backlog", "count": 3},
             {"status": "done", "count": 2},
@@ -1558,7 +1564,7 @@ class TestBoardViewTerminalFilter:
 
     def test_respects_explicit_status_filter(self):
         """When user explicitly asks for a status, don't filter it out."""
-        conn, cur = _mock_conn_and_cursor()
+        conn, cur = _mock_conn_and_cursor(fetchone_value=ARCHIVED_NONE)
         cur.fetchall.return_value = [
             {"status": "done", "count": 5},
         ]
@@ -1573,7 +1579,7 @@ class TestBoardViewTerminalFilter:
 
     def test_type_specific_terminal_exclusion(self):
         """Terminal exclusion should only exclude terminals for the given type."""
-        conn, cur = _mock_conn_and_cursor()
+        conn, cur = _mock_conn_and_cursor(fetchone_value=ARCHIVED_NONE)
         cur.fetchall.return_value = [
             {"status": "triage", "count": 2},
             {"status": "confirmed", "count": 1},
@@ -1591,7 +1597,7 @@ class TestBoardViewTerminalFilter:
         assert "bug" in executed_params
 
     def test_excludes_archived_by_default(self):
-        conn, cur = _mock_conn_and_cursor()
+        conn, cur = _mock_conn_and_cursor(fetchone_value=ARCHIVED_NONE)
         cur.fetchall.return_value = [
             {"status": "backlog", "count": 3},
         ]
@@ -1602,7 +1608,7 @@ class TestBoardViewTerminalFilter:
         assert "archived_at IS NULL" in executed_sql
 
     def test_includes_archived_when_requested(self):
-        conn, cur = _mock_conn_and_cursor()
+        conn, cur = _mock_conn_and_cursor(fetchone_value=ARCHIVED_NONE)
         cur.fetchall.return_value = [
             {"status": "backlog", "count": 3},
         ]

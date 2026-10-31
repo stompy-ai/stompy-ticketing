@@ -204,7 +204,7 @@ class TestServiceUsesIdentifier:
         _assert_uses_identifier(cur, SAFE_SCHEMA)
 
     def test_board_view_summary_uses_identifier(self):
-        conn, cur = _mock_conn_and_cursor()
+        conn, cur = _mock_conn_and_cursor(fetchone_value={"count": 0})  # archived COUNT (3296)
         cur.fetchall.return_value = [{"status": "backlog", "count": 1}]
 
         self.service.board_view(conn, SAFE_SCHEMA, view="summary")

@@ -181,7 +181,7 @@ class TestUpdateTicketAPI:
 @pytest.mark.asyncio
 class TestBoardViewAPI:
     async def test_summary_board(self):
-        conn, cur = _make_mock_conn()
+        conn, cur = _make_mock_conn(fetchone_value={"count": 0})  # archived COUNT (3296)
         cur.fetchall.return_value = [
             {"status": "backlog", "count": 3},
             {"status": "in_progress", "count": 1},
