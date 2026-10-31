@@ -24,7 +24,7 @@ from stompy_ticketing.leases import LeaseRefused
 from stompy_ticketing.archival import ArchiveRefused
 from stompy_ticketing.archive_actions import archive_action
 from stompy_ticketing.refs import TicketRefError, coerce_ticket_ref, format_display_id
-from stompy_ticketing.ticket_projection import status_change as _status_change
+from stompy_ticketing.ticket_projection import get_view, status_change as _status_change
 from stompy_ticketing.safe_regex import compile_search_regex
 
 from psycopg2 import OperationalError as _OperationalError
@@ -463,7 +463,7 @@ def register_ticketing_tools(
                     result = service.get_ticket(conn, schema, ticket_id)
                     if not result:
                         return not_found_error("Ticket", ticket_id)
-                    return _safe_json(_decorate(result))
+                    return _safe_json(get_view(_decorate(result)))  # 3293: each fact once
 
                 elif action == "append":
                     if not ticket_id or not description:

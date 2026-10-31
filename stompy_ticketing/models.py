@@ -133,6 +133,9 @@ class TicketHistoryEntry(BaseModel):
     field_name: str
     old_value: Optional[str] = None
     new_value: Optional[str] = None
+    # MCP get, description_appended rows: the section's full length, with
+    # new_value cut to its head (the whole text is in description, 3293).
+    new_value_chars: Optional[int] = None
     changed_by: Optional[str] = None  # str(internal_id) — identity, never a note (1594)
     changed_by_display: Optional[str] = None  # resolved at read time by the host
     changed_at: Optional[float] = None
