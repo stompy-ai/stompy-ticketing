@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, List, Optional, Protocol, Tuple
 
 from psycopg2 import IntegrityError, sql
 from stompy_ticketing.archival import ArchiveMixin
-from stompy_ticketing.board_view import BoardMixin
+from stompy_ticketing.board_view import BoardMixin, context_links_present
 from stompy_ticketing.duplicates import content_hash as duplicate_content_hash
 from stompy_ticketing.stale_archive import run_if_due, sweep_if_due
 
@@ -472,13 +472,12 @@ class TicketService(ArchiveMixin, BoardMixin):
 
         if include_links:
             response.links = self._get_links_for_ticket(cur, schema, ticket_id)
-            # Also fetch context links
-            try:
+            # A schema predating migration 32 has no context links; a failed
+            # read here would abort the caller's transaction (STOMPY-3296).
+            if context_links_present(conn, cur, schema):
                 response.context_links = self.list_context_links_for_ticket(
                     conn, schema, ticket_id
                 )
-            except Exception:
-                pass  # Table may not exist yet
 
         return response
 
@@ -2059,20 +2058,17 @@ class TicketService(ArchiveMixin, BoardMixin):
             return {}
         sch = sql.Identifier(schema)
         placeholders = sql.SQL(", ").join(sql.Placeholder() * len(ticket_ids))
-        try:
-            cur.execute(
-                sql.SQL("""
-                SELECT tcl.*, t.title AS ticket_title, t.status AS ticket_status
-                FROM {}.ticket_context_links tcl
-                JOIN {}.tickets t ON t.id = tcl.ticket_id
-                WHERE tcl.ticket_id IN ({ph})
-                ORDER BY tcl.created_at DESC
-                """).format(sch, sch, ph=placeholders),
-                ticket_ids,
-            )
-        except Exception:
-            # Table may not exist yet on older schemas
-            return {tid: [] for tid in ticket_ids}
+        # The caller asks context_links_present first (STOMPY-3296).
+        cur.execute(
+            sql.SQL("""
+            SELECT tcl.*, t.title AS ticket_title, t.status AS ticket_status
+            FROM {}.ticket_context_links tcl
+            JOIN {}.tickets t ON t.id = tcl.ticket_id
+            WHERE tcl.ticket_id IN ({ph})
+            ORDER BY tcl.created_at DESC
+            """).format(sch, sch, ph=placeholders),
+            ticket_ids,
+        )
         result: Dict[int, List[ContextLinkResponse]] = {tid: [] for tid in ticket_ids}
         for r in cur.fetchall():
             tid = r["ticket_id"]
