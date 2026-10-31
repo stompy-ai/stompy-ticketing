@@ -16,7 +16,7 @@ from psycopg2 import IntegrityError, sql
 from stompy_ticketing.archival import ArchiveMixin
 from stompy_ticketing.board_view import BoardMixin
 from stompy_ticketing.duplicates import content_hash as duplicate_content_hash
-from stompy_ticketing.stale_archive import sweep_if_due
+from stompy_ticketing.stale_archive import run_if_due, sweep_if_due
 
 from stompy_ticketing.models import (
     BatchItemResult,
@@ -1077,8 +1077,11 @@ class TicketService(ArchiveMixin, BoardMixin):
         )
         return [{"tag": r["tag"], "count": r["count"]} for r in cur.fetchall()]
 
+    #: Rows _backfill_null_tsvectors fixes per call.
+    TSVECTOR_BACKFILL_LIMIT = 200
+
     def _backfill_null_tsvectors(
-        self, conn: DBConnection, schema: str, limit: int = 200
+        self, conn: DBConnection, schema: str, limit: int = TSVECTOR_BACKFILL_LIMIT
     ) -> int:
         """Backfill NULL content_tsvector rows from title+description.
 
@@ -1091,20 +1094,25 @@ class TicketService(ArchiveMixin, BoardMixin):
             Number of rows backfilled.
         """
         cur = conn.cursor()
-        cur.execute(
-            sql.SQL("""
-                UPDATE {schema}.tickets
-                SET content_tsvector = to_tsvector('english',
-                    coalesce(title, '') || ' ' || coalesce(description, ''))
-                WHERE id IN (
-                    SELECT id FROM {schema}.tickets
-                    WHERE content_tsvector IS NULL
-                      AND (title IS NOT NULL OR description IS NOT NULL)
-                    LIMIT %s
-                )
-            """).format(schema=sql.Identifier(schema)),
-            (limit,),
-        )
+        try:
+            cur.execute(
+                sql.SQL("""
+                    UPDATE {schema}.tickets
+                    SET content_tsvector = to_tsvector('english',
+                        coalesce(title, '') || ' ' || coalesce(description, ''))
+                    WHERE id IN (
+                        SELECT id FROM {schema}.tickets
+                        WHERE content_tsvector IS NULL
+                          AND (title IS NOT NULL OR description IS NOT NULL)
+                        LIMIT %s
+                    )
+                """).format(schema=sql.Identifier(schema)),
+                (limit,),
+            )
+        except Exception:
+            # A failed UPDATE aborts the transaction; the search reads next.
+            conn.rollback()
+            raise
         count = cur.rowcount or 0
         if count > 0:
             conn.commit()
@@ -1144,11 +1152,13 @@ class TicketService(ArchiveMixin, BoardMixin):
         """
         sweep_if_due(self, conn, schema)  # throttled, never fails the read (3288)
 
-        # Lazy backfill for NULL tsvectors (handles pre-trigger tickets)
-        try:
-            self._backfill_null_tsvectors(conn, schema)
-        except Exception:
-            pass
+        # Lazy backfill for NULL tsvectors: only pre-trigger tickets are NULL,
+        # since the trigger fills every create and edit. Throttled; a full
+        # batch re-arms so a backlog drains one batch per search (3290).
+        run_if_due(
+            "tsvector_backfill", conn, schema,
+            lambda: self._backfill_null_tsvectors(conn, schema) >= self.TSVECTOR_BACKFILL_LIMIT,
+        )
 
         cur = conn.cursor()
         tsquery_param = self._build_or_tsquery_param(query)
