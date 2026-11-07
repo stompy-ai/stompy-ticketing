@@ -205,6 +205,7 @@ async def _put(conn, body):
 
 
 class TestTheRestDoor:
+    @pytest.mark.usefixtures("route_links_unread")
     def test_rest_put_replace_is_409_description_would_replace_2394(self):
         conn, cur = _conn()
         r = asyncio.run(_put(conn, {"description": "a note"}))
@@ -215,12 +216,14 @@ class TestTheRestDoor:
         assert "confirm" in d["message"]
         assert not _wrote(cur)
 
+    @pytest.mark.usefixtures("route_links_unread")
     def test_rest_put_confirm_true_in_the_body_replaces_2394(self):
         conn, cur = _conn(written="a note")
         r = asyncio.run(_put(conn, {"description": "a note", "confirm": True}))
         assert r.status_code == 200, r.text
         assert _wrote(cur)
 
+    @pytest.mark.usefixtures("route_links_unread")
     def test_rest_put_extend_is_unaffected_2394(self):
         conn, cur = _conn()
         r = asyncio.run(_put(conn, {"description": STORED + "\n\nmore"}))

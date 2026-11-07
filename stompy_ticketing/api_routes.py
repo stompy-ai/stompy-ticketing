@@ -265,6 +265,7 @@ async def update_ticket(name: str, ticket_id: int, body: TicketUpdate):
     _require_db()
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=True) as conn:
+        links = _service.read_links(conn, schema, ticket_id)  # STOMPY-3492: before the write
         try:
             result = _service.update_ticket(conn, schema, ticket_id, body, changed_by=_actor())
         except TicketService.DescriptionWouldReplace as w:
@@ -294,6 +295,7 @@ async def update_ticket(name: str, ticket_id: int, body: TicketUpdate):
             )
         if not result:
             raise HTTPException(status_code=404, detail=f"Ticket {ticket_id} not found")
+        result.links, result.context_links = links
     _invalidate_ticket_cache(name)
     return redact_payload(result)
 
@@ -304,6 +306,7 @@ async def transition_ticket(name: str, ticket_id: int, body: TicketTransition):
     _require_db()
     schema = _get_schema(name)
     with _get_db_for_project(name, require_write=True) as conn:
+        links = _service.read_links(conn, schema, ticket_id)  # STOMPY-3492: before the write
         try:
             result = _service.transition_ticket(
                 conn, schema, ticket_id, body.status,
@@ -314,6 +317,7 @@ async def transition_ticket(name: str, ticket_id: int, body: TicketTransition):
                 raise HTTPException(
                     status_code=404, detail=f"Ticket {ticket_id} not found"
                 )
+            result.links, result.context_links = links
         except InvalidTransitionError as e:
             raise HTTPException(status_code=422, detail=str(e))
     _invalidate_ticket_cache(name)

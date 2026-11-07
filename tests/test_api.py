@@ -118,6 +118,7 @@ class TestGetTicketAPI:
 
 @pytest.mark.asyncio
 class TestTransitionTicketAPI:
+    @pytest.mark.usefixtures("route_links_unread")
     @patch("stompy_ticketing.service.time")
     async def test_valid_transition(self, mock_time):
         mock_time.time.return_value = FIXED_TIME
