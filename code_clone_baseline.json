@@ -1,0 +1,56 @@
+{
+ "scripts/red/red_2380_rest_actor.py::scripts/red/red_2455_duplicate_hints.py::0249520bcab5cc04": {
+  "files": [
+   "scripts/red/red_2380_rest_actor.py",
+   "scripts/red/red_2455_duplicate_hints.py"
+  ],
+  "count": 1,
+  "lines": 27,
+  "tokens": 212
+ },
+ "scripts/red/red_2380_rest_actor.py::scripts/red/red_2455_duplicate_hints.py::3de0db1a8a910d31": {
+  "files": [
+   "scripts/red/red_2380_rest_actor.py",
+   "scripts/red/red_2455_duplicate_hints.py"
+  ],
+  "count": 1,
+  "lines": 39,
+  "tokens": 330
+ },
+ "scripts/red/red_2380_rest_actor.py::scripts/red/red_2455_duplicate_hints.py::dce310760f33ed34": {
+  "files": [
+   "scripts/red/red_2380_rest_actor.py",
+   "scripts/red/red_2455_duplicate_hints.py"
+  ],
+  "count": 1,
+  "lines": 9,
+  "tokens": 107
+ },
+ "stompy_ticketing/service.py::stompy_ticketing/service.py::5b2ffd45090401d3": {
+  "files": [
+   "stompy_ticketing/service.py",
+   "stompy_ticketing/service.py"
+  ],
+  "count": 1,
+  "lines": 42,
+  "tokens": 181
+ },
+ "stompy_ticketing/service.py::stompy_ticketing/service.py::65e1889d26dfc5ef": {
+  "files": [
+   "stompy_ticketing/service.py",
+   "stompy_ticketing/service.py"
+  ],
+  "count": 1,
+  "lines": 24,
+  "tokens": 98
+ },
+ "stompy_ticketing/service.py::stompy_ticketing/service.py::bb910dd41a96f727": {
+  "files": [
+   "stompy_ticketing/service.py",
+   "stompy_ticketing/service.py"
+  ],
+  "count": 1,
+  "lines": 16,
+  "tokens": 83
+ }
+}
