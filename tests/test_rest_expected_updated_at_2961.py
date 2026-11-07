@@ -61,6 +61,7 @@ async def _put(conn, body):
         return await c.put("/projects/p/tickets/7", json=body)
 
 
+@pytest.mark.usefixtures("route_links_unread")
 @pytest.mark.asyncio
 async def test_rest_stale_expected_updated_at_is_409_conflict_2961():
     conn, _ = _conn([_row(updated_at=200.0), None, {"updated_at": 200.0}])

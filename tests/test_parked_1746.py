@@ -513,6 +513,7 @@ class TestRestDoor:
         assert TicketTransition(status=PARKED, reason="x", revisit_by="2026-12-01").reason == "x"
         assert BatchMoveRequest(ticket_ids=[1], status=PARKED, reason="x").reason == "x"
 
+    @pytest.mark.usefixtures("route_links_unread")
     @patch("stompy_ticketing.service.time")
     async def test_move_route_carries_reason_to_the_core(self, mock_time):
         mock_time.time.return_value = FIXED_TIME

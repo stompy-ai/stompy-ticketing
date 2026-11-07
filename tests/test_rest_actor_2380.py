@@ -45,6 +45,7 @@ def door(monkeypatch):
         action="close", total=1, succeeded=1, failed=0, dry_run=False)
     service.update_ticket.return_value = _ticket()
     service.transition_ticket.return_value = _ticket(status="in_progress")
+    service.read_links.return_value = ([], [])  # STOMPY-3492: the doors read links first
     monkeypatch.setattr(api_routes, "_service", service)
 
     def configure(actor_func):

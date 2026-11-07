@@ -471,15 +471,25 @@ class TicketService(ArchiveMixin, BoardMixin):
             response.history = self._fetch_history(cur, schema, ticket_id)
 
         if include_links:
-            response.links = self._get_links_for_ticket(cur, schema, ticket_id)
-            # A schema predating migration 32 has no context links; a failed
-            # read here would abort the caller's transaction (STOMPY-3296).
-            if context_links_present(conn, cur, schema):
-                response.context_links = self.list_context_links_for_ticket(
-                    conn, schema, ticket_id
-                )
+            response.links, response.context_links = self.read_links(conn, schema, ticket_id)
 
         return response
+
+    def read_links(self, conn: DBConnection, schema: str, ticket_id: int) -> Tuple[list, list]:
+        """``(links, context_links)`` of one ticket, as get_ticket answers them.
+
+        A REST mutation answers the full ticket shape, so empty arrays there read
+        "this ticket has no links" (STOMPY-3492). Those doors read links BEFORE
+        writing (a move or an update changes none), so a failed read refuses with
+        nothing written instead of failing a committed write. transition/close
+        skip links: they run once per step in close walks and batch moves."""
+        cur = conn.cursor()
+        links = self._get_links_for_ticket(cur, schema, ticket_id)
+        # A schema predating migration 32 has no context links; a failed
+        # read here would abort the caller's transaction (STOMPY-3296).
+        if not context_links_present(conn, cur, schema):
+            return links, []
+        return links, self.list_context_links_for_ticket(conn, schema, ticket_id)
 
     class Conflict(Exception):
         """update_ticket's optimistic guard fired: the ticket changed since the
