@@ -79,15 +79,44 @@ async def test_update_answers_the_tickets_links():
 
 def test_get_ticket_and_the_doors_are_one_read():
     """get_ticket fills links through read_links, so GET and a mutation cannot drift."""
-    import inspect
-
     from stompy_ticketing.service import TicketService
 
-    assert "self.read_links(" in inspect.getsource(TicketService.get_ticket)
+    conn, cur = _make_mock_conn(fetchone_value=_make_ticket_row(id=5))
+    with patch.object(TicketService, "read_links", return_value=([LINK], [CTX])) as spy:
+        got = TicketService().get_ticket(conn, "p", 5, include_history=False)
+    spy.assert_called_once_with(conn, "p", 5)
+    assert got.links == [LINK] and got.context_links == [CTX]
+
+
+@pytest.mark.asyncio
+async def test_a_schema_without_context_links_still_moves():
+    """STOMPY-3296's guard now sits in front of a WRITE: a schema with no
+    context-link table answers its ticket links and an empty context list."""
+    a, _, c, t = _patched()
+    with a, patch("stompy_ticketing.service.context_links_present", return_value=False), c, t as tm:
+        tm.time.return_value = FIXED_TIME
+        r = await _call(
+            "POST",
+            "/projects/p/tickets/5/move",
+            {"status": "in_progress"},
+            [_make_ticket_row(id=5), _make_ticket_row(id=5, status="in_progress")],
+        )
+    assert r.status_code == 200, r.text
+    assert [x["id"] for x in r.json()["links"]] == [2] and r.json()["context_links"] == []
+
+
+@pytest.mark.asyncio
+async def test_an_unknown_ticket_is_still_404():
+    a, b, c, t = _patched()
+    with a, b, c, t:
+        r = await _call("POST", "/projects/p/tickets/99/move", {"status": "in_progress"}, [None])
+    assert r.status_code == 404
 
 
 @pytest.mark.asyncio
 async def test_a_failed_links_read_writes_nothing():
+    """The read fails BEFORE the write, so it propagates like any DB fault on GET
+    (the host's handler answers it); what matters is that nothing was written."""
     with patch(
         "stompy_ticketing.service.TicketService._get_links_for_ticket",
         side_effect=RuntimeError("links table unreadable"),
