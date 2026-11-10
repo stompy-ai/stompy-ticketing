@@ -62,7 +62,7 @@ def _titles(conn, who):
     return sorted(t.title for t in rows)
 
 
-@pytest.mark.parametrize("who", ["astra", "Astra", "ASTRA", " astra "])
+@pytest.mark.parametrize("who", ["astra", "Astra", "ASTRA", " astra ", "\tastra\n"])
 def test_list_matches_assignee_whatever_its_case_3544(conn, who):
     assert _titles(conn, who) == ["lower", "upper"]
 
@@ -74,10 +74,14 @@ def test_list_still_separates_different_assignees_3544(conn):
 def test_claim_next_finds_a_ticket_assigned_in_another_case_3544(conn):
     claimed = leases.claim_next(conn, SCHEMA, "ASTRA", {"agent_label": "astra"})
     row = claimed[0] if isinstance(claimed, tuple) else claimed
-    assert row is not None and row["assignee"] in ("Astra", "astra")
+    assert row is not None and row["title"] in ("upper", "lower"), row  # never 'other'
 
 
 def test_the_stored_spelling_is_kept_3544(conn):
     with conn.cursor() as cur:
-        cur.execute(f'SELECT assignee FROM "{SCHEMA}".tickets ORDER BY id')
-        assert [r["assignee"] for r in cur.fetchall()] == ["Astra", "astra", "Claude"]
+        cur.execute(f'SELECT title, assignee FROM "{SCHEMA}".tickets')
+        assert {r["title"]: r["assignee"] for r in cur.fetchall()} == {
+            "upper": "Astra",
+            "lower": "astra",
+            "other": "Claude",
+        }
