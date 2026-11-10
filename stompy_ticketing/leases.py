@@ -144,7 +144,8 @@ def claim_next(conn, schema, assignee, holder, ttl_minutes=60, *, now=None):
             sql.SQL("""
             WITH candidate AS (
                 SELECT id FROM {s}.tickets
-                WHERE assignee=%s AND status=ANY(%s) AND archived_at IS NULL
+                WHERE lower(btrim(assignee, E' \t\r\n'))=lower(btrim(%s, E' \t\r\n'))  -- 3544
+                    AND status=ANY(%s) AND archived_at IS NULL
                     AND (claimed_until IS NULL OR claimed_until<=%s)
                 ORDER BY CASE priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1
                     WHEN 'medium' THEN 2 WHEN 'low' THEN 3 ELSE 4 END,
