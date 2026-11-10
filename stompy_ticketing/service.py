@@ -950,7 +950,9 @@ class TicketService(ArchiveMixin, BoardMixin):
             params.append(filters.priority.value)
 
         if filters.assignee:
-            where_clauses.append("assignee = %s")
+            # An assignee is an identity, not free text: 'Astra' and 'astra' are one
+            # agent (STOMPY-3544). The stored spelling is kept as written.
+            where_clauses.append("lower(btrim(assignee)) = lower(btrim(%s))")
             params.append(filters.assignee)
 
         if filters.tags:
