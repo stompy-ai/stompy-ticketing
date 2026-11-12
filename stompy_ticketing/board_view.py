@@ -153,6 +153,8 @@ class BoardMixin:
         include_archived: bool = False,
         limit: Optional[int] = None,
         fields: str = "full",
+        assignee: Optional[str] = None,
+        priority: Optional[str] = None,
     ) -> BoardView:
         """Get a board view of tickets grouped by status.
 
@@ -182,6 +184,15 @@ class BoardMixin:
         if type_filter:
             conditions.append("type = %s")
             params.append(type_filter)
+        if assignee:
+            # As list_tickets matches it (3544), so every door agrees (3551).
+            conditions.append(
+                "lower(btrim(assignee, E' \\t\\r\\n')) = lower(btrim(%s, E' \\t\\r\\n'))"
+            )
+            params.append(assignee)
+        if priority:
+            conditions.append("priority = %s")
+            params.append(priority)
         if status_filter:
             # Explicit status filter — don't add terminal exclusion
             conditions.append("status = %s")
