@@ -54,6 +54,23 @@ def _resolution_refusal(ticket_type: str, terminals) -> str:
     )
 
 
+def _all_status_words() -> set:
+    """Every status name any ticket type knows, lowercased."""
+    words = set()
+    for machine in STATE_MACHINES.values():
+        words.update(machine["terminal"])
+        for src, dests in machine["transitions"].items():
+            words.add(src)
+            words.update(dests)
+    return {w.lower() for w in words}
+
+
+def _closing_note_text(note: str, final_status: str) -> str:
+    """The note as it lands on the ticket: dated here, attributed by history."""
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    return f"## Closed as {final_status} ({day})\n{note.strip()}"
+
+
 class InvalidTransitionError(Exception):
     """Raised when a ticket transition violates the state machine."""
 
@@ -848,6 +865,26 @@ class TicketService(ArchiveMixin, BoardMixin):
             conn.rollback()
             raise
 
+    def _split_resolution(self, resolution, ticket_type, terminals):
+        """(target terminal or None, closing note or None) for a close (STOMPY-2095 a).
+
+        A terminal of this type targets it. Any other STATUS word is a status
+        mistake and is refused without echo ('wont_fix' on a task must not close
+        it as 'done'). Anything else is the caller's closing note: the ticket
+        closes with its type's default terminal and the note is kept.
+        """
+        if not resolution or not resolution.strip():
+            return None, None
+        if resolution in terminals:
+            return resolution, None
+        if resolution.strip().lower() in _all_status_words():
+            raise InvalidTransitionError(_resolution_refusal(ticket_type, terminals))
+        if len(_closing_note_text(resolution, "x" * 16)) > self.MAX_APPEND_CHARS:
+            raise ValueError(
+                f"closing note exceeds {self.MAX_APPEND_CHARS} chars; nothing was closed"
+            )
+        return None, resolution
+
     def close_ticket(
         self,
         conn: DBConnection,
@@ -891,12 +928,10 @@ class TicketService(ArchiveMixin, BoardMixin):
         if current_status in terminals:
             return self.get_ticket(conn, schema, ticket_id, include_history=False, include_links=False)
 
-        # Validate resolution if provided
-        if resolution and resolution not in terminals:
-            raise InvalidTransitionError(_resolution_refusal(ticket_type, terminals))
+        target, note = self._split_resolution(resolution, ticket_type, terminals)
 
         # Find path to terminal (prefers positive terminal by default)
-        path = self._find_close_path(ticket_type, current_status, resolution)
+        path = self._find_close_path(ticket_type, current_status, target)
         if not path:
             sm = STATE_MACHINES[ticket_type]
             allowed = sm["transitions"].get(current_status, [])
@@ -910,6 +945,10 @@ class TicketService(ArchiveMixin, BoardMixin):
         result = None
         for step_status in path:
             result = self.transition_ticket(conn, schema, ticket_id, step_status, changed_by)
+        if note and result is not None:
+            self.append_description(
+                conn, schema, ticket_id, _closing_note_text(note, path[-1]), changed_by=changed_by
+            )
         return result
 
     def list_tickets(
@@ -1506,18 +1545,19 @@ class TicketService(ArchiveMixin, BoardMixin):
                 succeeded += 1
                 continue
 
-            # Validate resolution for this ticket type if provided
-            if resolution and resolution not in terminals:
+            try:
+                target, note = self._split_resolution(resolution, ticket_type, terminals)
+            except (InvalidTransitionError, ValueError) as refused:
                 results.append(BatchItemResult(
                     ticket_id=tid, success=False,
                     old_status=current_status,
-                    error=_resolution_refusal(ticket_type, terminals),
+                    error=str(refused),
                 ))
                 failed += 1
                 continue
 
             # Find path to terminal via BFS-like walk
-            path = self._find_close_path(ticket_type, current_status, resolution)
+            path = self._find_close_path(ticket_type, current_status, target)
             if not path:
                 results.append(BatchItemResult(
                     ticket_id=tid, success=False,
@@ -1533,9 +1573,15 @@ class TicketService(ArchiveMixin, BoardMixin):
                 try:
                     for step_status in path:
                         self.transition_ticket(conn, schema, tid, step_status, changed_by)
+                    if note:
+                        self.append_description(
+                            conn, schema, tid, _closing_note_text(note, final_status),
+                            changed_by=changed_by,
+                        )
                     results.append(BatchItemResult(
                         ticket_id=tid, success=True,
                         old_status=current_status, new_status=final_status,
+                        note_kept=True if note else None,
                     ))
                     succeeded += 1
                 except Exception as e:
