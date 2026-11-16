@@ -68,6 +68,13 @@ def test_a_terminal_status_still_closes_without_a_note():
     svc.append_description.assert_not_called()
 
 
+def _says_how_to_leave_a_note(message, default):
+    """STOMPY-3684: since 0.8.35 a sentence IS kept as the note, so the refusal
+    must say so, and must not send agents to append-then-close any more."""
+    assert "not a note" not in message and "append" not in message
+    assert "sentence" in message and "closing note" in message and default in message
+
+
 @pytest.mark.parametrize("token", ["wont_fix", "in_progress", "rejected", "WONT_FIX"])
 def test_a_status_word_of_the_wrong_kind_is_still_refused_without_echo(token):
     """A status NAME is a status mistake, never a note: 'wont_fix' on a task must
@@ -77,7 +84,8 @@ def test_a_status_word_of_the_wrong_kind_is_still_refused_without_echo(token):
     with pytest.raises(InvalidTransitionError) as refused:
         svc.close_ticket(conn, SCHEMA, 1, resolution=token)
     message = str(refused.value)
-    assert "done" in message and "cancelled" in message and "append" in message
+    assert "done" in message and "cancelled" in message
+    _says_how_to_leave_a_note(message, "done")
     svc.transition_ticket.assert_not_called()
     svc.append_description.assert_not_called()
 
@@ -118,7 +126,8 @@ def test_batch_close_refuses_a_wrong_status_word_without_echo():
     result = svc.batch_close(conn, SCHEMA, [1], resolution="wont_fix", confirm=True)
     error = result.results[0].error
     assert result.results[0].success is False
-    assert "done" in error and "cancelled" in error and "append" in error
+    assert "done" in error and "cancelled" in error
+    _says_how_to_leave_a_note(error, "done")
 
 
 def test_a_valid_terminal_still_closes():
