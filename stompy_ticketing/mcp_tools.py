@@ -299,10 +299,11 @@ def register_ticketing_tools(
         confirm: Annotated[bool, "batch_*: execute (default: preview only); update: allow description to REPLACE a non-empty one"] = False,
         resolution: Annotated[
             Optional[str],
-            "Terminal status enum value for close (NOT free-text). "
-            "Per type: task→done|cancelled, bug→resolved|wont_fix, "
-            "feature→shipped|rejected, decision→decided|deferred. "
-            "Defaults to the positive terminal (done/resolved/shipped/decided)."
+            "close/batch_close: a terminal status for the type "
+            "(task→done|cancelled, bug→resolved|wont_fix, "
+            "feature→shipped|rejected, decision→decided|deferred), OR free text: "
+            "the ticket then closes with the positive terminal (done/resolved/shipped/decided) "
+            "and the text is kept on it as the closing note."
         ] = None,
         limit: Annotated[Optional[int], "Max tickets for list (default 20, max 200)"] = None,
         offset: Annotated[Optional[int], "Skip N tickets for list pagination"] = None,
@@ -343,12 +344,12 @@ def register_ticketing_tools(
           move        → ticket_id + status (one step; a refusal names the path — close walks it) (status='parked' also needs reason; optional revisit_by)
           list        → optional filters (type/status/priority/assignee/tags/grep); fields='full' for bodies
           list_tags   → show all unique tags with usage counts (useful before filtering by tags)
-          close       → ticket_id
+          close       → ticket_id (optional resolution: a terminal status, or a free-text closing note kept on the ticket)
           archive     → ticket_id archives THAT parked/closed ticket without admission; no id runs legacy stale sweep
           batch_archive → ticket_ids; preview by default, confirm=True to archive eligible parked/closed tickets
           unarchive   → ticket_id; restore without changing status, counted restores require allowance
           batch_move  → ticket_ids + status; confirm=True to execute (parked: one reason for the batch)
-          batch_close → ticket_ids; confirm=True to execute
+          batch_close → ticket_ids; confirm=True to execute (resolution as for close)
           claim       → ticket_id; renews your lease, refuses another live holder
           release     → ticket_id; holder only, expired lease is a no-op
           claim_next  → assignee; returns one highest-priority oldest eligible ticket, already leased
@@ -639,7 +640,12 @@ def register_ticketing_tools(
                     )
                     if not result:
                         return not_found_error("Ticket", ticket_id)
-                    return _safe_json({"status": "closed", "ticket": _status_change(result)})
+                    answer = {"status": "closed", "ticket": _status_change(result)}
+                    if resolution and resolution.strip() and resolution != result.status:
+                        # STOMPY-2095 (a): free text was kept as the closing note.
+                        answer["note_kept"] = True
+                        answer["closed_as"] = result.status
+                    return _safe_json(answer)
 
                 elif action == "batch_move":
                     if not ticket_ids or not status:
@@ -670,6 +676,7 @@ def register_ticketing_tools(
                         conn, schema, parsed_ids,
                         confirm=confirm,
                         resolution=resolution,
+                        changed_by=_actor(),
                     )
                     return _safe_json(result)
 

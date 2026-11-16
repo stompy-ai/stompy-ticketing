@@ -106,8 +106,8 @@ class BatchMoveRequest(BaseModel):
 class BatchCloseRequest(BaseModel):
     ticket_ids: List[int] = Field(..., min_length=1, max_length=50)
     confirm: bool = False
-    # Accepted for old clients, then DROPPED: history has no note column, and
-    # this text was once stored as the actor (STOMPY-2380). Never an identity.
+    # The closing note, kept on each ticket (STOMPY-2095); a terminal status name
+    # targets that status. Once stored as the actor (STOMPY-2380): never an identity.
     note: Optional[str] = None
 
 
@@ -294,6 +294,7 @@ class BatchItemResult(BaseModel):
     error: Optional[str] = None
     old_status: Optional[str] = None
     new_status: Optional[str] = None
+    note_kept: Optional[bool] = None  # batch_close: free-text resolution kept (STOMPY-2095)
 
 
 class BatchOperationResult(BaseModel):

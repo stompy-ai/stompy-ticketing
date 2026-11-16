@@ -223,6 +223,7 @@ async def batch_close(name: str, body: BatchCloseRequest):
             conn, schema, body.ticket_ids,
             confirm=body.confirm,
             changed_by=_actor(),
+            resolution=body.note,  # kept as the closing note (STOMPY-2095), never the actor
         )
     if body.confirm:
         _invalidate_ticket_cache(name)
