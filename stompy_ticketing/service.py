@@ -949,9 +949,10 @@ class TicketService(ArchiveMixin, BoardMixin):
         for step_status in path:
             result = self.transition_ticket(conn, schema, ticket_id, step_status, changed_by)
         if note and result is not None:
-            self.append_description(
+            # The answer is the ticket as it stands AFTER the note (STOMPY-3692).
+            result = self.append_description(
                 conn, schema, ticket_id, _closing_note_text(note, path[-1]), changed_by=changed_by
-            )
+            ) or result
         return result
 
     def list_tickets(
