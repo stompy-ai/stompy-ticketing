@@ -43,6 +43,17 @@ from stompy_ticketing.models import (
 # =========================================================================== #
 
 
+def _resolution_refusal(ticket_type: str, terminals) -> str:
+    """Why a close's `resolution` was refused, WITHOUT the caller's text (STOMPY-2095).
+
+    `resolution` names the terminal status; agents pass their closing note there,
+    and quoting it put customer prose into the host's error_events rows."""
+    return (
+        f"resolution must be one of {list(terminals)} for a {ticket_type}: it names the "
+        "closing status, not a note. To record why it closed, use action='append' first."
+    )
+
+
 class InvalidTransitionError(Exception):
     """Raised when a ticket transition violates the state machine."""
 
@@ -882,10 +893,7 @@ class TicketService(ArchiveMixin, BoardMixin):
 
         # Validate resolution if provided
         if resolution and resolution not in terminals:
-            raise InvalidTransitionError(
-                f"'{resolution}' is not a terminal status for {ticket_type}. "
-                f"Valid terminals: {terminals}"
-            )
+            raise InvalidTransitionError(_resolution_refusal(ticket_type, terminals))
 
         # Find path to terminal (prefers positive terminal by default)
         path = self._find_close_path(ticket_type, current_status, resolution)
@@ -1503,8 +1511,7 @@ class TicketService(ArchiveMixin, BoardMixin):
                 results.append(BatchItemResult(
                     ticket_id=tid, success=False,
                     old_status=current_status,
-                    error=f"'{resolution}' is not a terminal status for {ticket_type}. "
-                          f"Valid: {terminals}",
+                    error=_resolution_refusal(ticket_type, terminals),
                 ))
                 failed += 1
                 continue
