@@ -36,7 +36,8 @@ def _svc(final_status):
     """A service whose walk and append are recorded, not run against SQL."""
     svc = TicketService()
     svc.transition_ticket = MagicMock(return_value=MagicMock(status=final_status))
-    svc.append_description = MagicMock()
+    # append answers the ticket as it stands after the note (STOMPY-3692).
+    svc.append_description = MagicMock(return_value=MagicMock(status=final_status))
     return svc
 
 
@@ -170,3 +171,22 @@ def test_rest_batch_close_keeps_the_note_and_never_makes_it_the_actor(door):
     assert r.status_code == 200, r.text
     assert service.batch_close.call_args.kwargs["resolution"] == NOTE
     assert service.batch_close.call_args.kwargs["changed_by"] == CALLER
+
+
+def test_close_with_a_note_returns_the_ticket_as_it_stands_after_the_note():
+    """STOMPY-3692 (6.6.40 dogfood round 3): close returned the last transition's
+    row, read BEFORE the note was appended, so the REST door answered a stale
+    description. The answer is the appended ticket."""
+    svc = _svc("done")
+    noted = MagicMock(status="done", description="... ## Closed as done\n" + NOTE)
+    svc.append_description = MagicMock(return_value=noted)
+    conn = _conn({"type": "task", "status": "in_progress"})
+    result = svc.close_ticket(conn, SCHEMA, 1, resolution=NOTE, changed_by="51")
+    assert result is noted
+
+
+def test_close_without_a_note_still_returns_the_closed_ticket():
+    svc = _svc("cancelled")
+    conn = _conn({"type": "task", "status": "backlog"})
+    result = svc.close_ticket(conn, SCHEMA, 1, resolution="cancelled")
+    assert result.status == "cancelled"
