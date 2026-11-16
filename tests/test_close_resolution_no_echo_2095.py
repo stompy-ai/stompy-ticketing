@@ -36,7 +36,8 @@ def _svc(final_status):
     """A service whose walk and append are recorded, not run against SQL."""
     svc = TicketService()
     svc.transition_ticket = MagicMock(return_value=MagicMock(status=final_status))
-    svc.append_description = MagicMock()
+    # append answers the ticket as it stands after the note (STOMPY-3692).
+    svc.append_description = MagicMock(return_value=MagicMock(status=final_status))
     return svc
 
 
