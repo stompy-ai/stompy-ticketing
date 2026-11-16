@@ -46,11 +46,14 @@ from stompy_ticketing.models import (
 def _resolution_refusal(ticket_type: str, terminals) -> str:
     """Why a close's `resolution` was refused, WITHOUT the caller's text (STOMPY-2095).
 
-    `resolution` names the terminal status; agents pass their closing note there,
-    and quoting it put customer prose into the host's error_events rows."""
+    Since 0.8.35 only a status WORD of the wrong kind is refused: free text is kept
+    as the closing note, so the sentence says so (STOMPY-3684). Quoting the input
+    once put customer prose into the host's error_events rows."""
+    terminals = list(terminals)
     return (
-        f"resolution must be one of {list(terminals)} for a {ticket_type}: it names the "
-        "closing status, not a note. To record why it closed, use action='append' first."
+        f"resolution is a status that cannot close a {ticket_type}. Use one of {terminals}, "
+        f"or write a sentence: the ticket then closes as {terminals[0]} and keeps the "
+        "sentence as its closing note."
     )
 
 
