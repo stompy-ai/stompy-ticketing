@@ -140,6 +140,14 @@ def _safe_json(data: Any) -> str:
         return json.dumps({"error": str(e)})
 
 
+def _card_with_size(ticket) -> dict:
+    """The card projection plus the length of the body it leaves out
+    (STOMPY-3721): enough to orient and to confirm a write, never the body."""
+    card = TicketService.to_card(ticket).model_dump()
+    card["description_chars"] = len(ticket.description or "")
+    return card
+
+
 def _omit_empty(obj: Any) -> Any:
     """Drop None values and empty collections, recursively (STOMPY-1908).
     Eight keys of `null` / `[]` per ticket said nothing; a caller that needs
@@ -324,7 +332,7 @@ def register_ticketing_tools(
         ] = None,
         fields: Annotated[
             Optional[Literal["card", "full"]],
-            "list only: 'card' (default) = id/title/type/status/priority/tags/assignee/description_preview; 'full' = whole records incl. description",
+            "list: 'card' (default) = id/title/type/status/priority/tags/assignee/description_preview; 'full' = whole records incl. description. get: 'card' = the same card plus description_chars, no body (default is the full record)",
         ] = None,
         agent_label: Annotated[str, "Caller-supplied agent label for leases; data, not account identity (max80)"] = "",
         ttl_minutes: Annotated[int, "Lease duration for claim/claim_next (1..480, default60)"] = 60,
@@ -332,7 +340,7 @@ def register_ticketing_tools(
     ) -> str:
         """Create, update, move, close, search, and batch-manage tickets. Supports glob filter on titles (grep param). Pass project= on every call.
 
-        Payloads: list returns CARDS (no description body; description_preview instead) — get returns the FULL record; move/close return the status change only.
+        Payloads: list returns CARDS (no description body; description_preview instead) — get returns the FULL record (fields='card' for the card plus description_chars); append returns a receipt (card + appended_chars, description_chars); move/close return the status change only.
 
         action → required params:
           create      → title (type defaults to task); the response names possible_duplicates (dry_run=True: only those)
@@ -465,6 +473,8 @@ def register_ticketing_tools(
                     result = service.get_ticket(conn, schema, ticket_id)
                     if not result:
                         return not_found_error("Ticket", ticket_id)
+                    if fields == "card":  # STOMPY-3721: orientation without the body
+                        return _safe_json(_card_with_size(result))
                     return _safe_json(get_view(_decorate(result)))  # 3293: each fact once
 
                 elif action == "append":
@@ -478,7 +488,12 @@ def register_ticketing_tools(
                         return json.dumps({"error": str(ve)})
                     if not result:
                         return not_found_error("Ticket", ticket_id)
-                    return _safe_json({"status": "appended", "ticket": result.model_dump()})
+                    # STOMPY-3721: a receipt, never the body. Echoing a 100k-char
+                    # ticket turned a successful append into an oversized-result
+                    # error, and a caller who believed it appended a duplicate.
+                    receipt = _card_with_size(result)
+                    receipt["appended_chars"] = len(description)
+                    return _safe_json({"status": "appended", "ticket": receipt})
 
                 elif action == "update":
                     if not ticket_id:
