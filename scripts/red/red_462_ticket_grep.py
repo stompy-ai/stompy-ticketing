@@ -28,6 +28,7 @@ CONTROLS = {
     "tests/test_cluster_c_fixes.py::TestBug180GrepAggregates::test_no_grep_keeps_original_aggregates",
 }
 INITIAL_RED = {
+    NATIVE + "test_native_mcp_invalid_pattern_is_a_client_refusal",
     NATIVE + "test_offset_past_matching_set_keeps_its_total",
     "tests/test_ticket_grep_462.py::test_native_glob_matches_fnmatch[[[]*]",
     "tests/test_ticket_grep_462.py::test_native_glob_matches_fnmatch[[!A]*]",
@@ -61,6 +62,7 @@ REVERTS = [
         "grep=grep,",
         "grep=None,",
         {
+            NATIVE + "test_native_mcp_invalid_pattern_is_a_client_refusal",
             NATIVE + "test_mcp_preserves_whole_filtered_totals_on_a_small_page",
             UNIT + "test_mcp_forwards_glob_and_retains_out_of_page_matches",
             "tests/test_cluster_c_fixes.py::TestBug180GrepAggregates::test_grep_filter_recomputes_by_status",
@@ -74,6 +76,10 @@ REVERTS = [
         {
             NATIVE + "test_native_glob_matches_fnmatch[" + pattern + "]"
             for pattern in ("a*", "a?", "[!A]*", "[a-c]*", "[[]*")
+        }
+        | {
+            NATIVE + "test_native_bracket_classes_match_oracle",
+            UNIT + "test_translation_is_independent_of_cpython_regex_generation",
         },
     ),
     (
@@ -86,6 +92,16 @@ REVERTS = [
             NATIVE + "test_mcp_preserves_whole_filtered_totals_on_a_small_page",
             UNIT + "test_mcp_forwards_glob_and_retains_out_of_page_matches",
             "tests/test_cluster_c_fixes.py::TestBug180GrepAggregates::test_grep_filter_recomputes_by_status",
+        },
+    ),
+    (
+        "do_not_classify_pattern_rejection",
+        "stompy_ticketing/service.py",
+        "        except InvalidRegularExpression as exc:\n",
+        "        except InvalidRegularExpression as exc:\n            raise\n",
+        {
+            UNIT + "test_postgres_pattern_rejection_is_a_client_refusal",
+            NATIVE + "test_native_mcp_invalid_pattern_is_a_client_refusal",
         },
     ),
 ]

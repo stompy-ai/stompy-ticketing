@@ -1,6 +1,6 @@
 """Shared ticket-list query: every count and page uses the same predicate."""
 
-import fnmatch
+import re
 from typing import Any, List
 
 from psycopg2 import sql
@@ -8,17 +8,62 @@ from psycopg2 import sql
 from .models import TicketListFilters, TicketListResponse
 
 
-def glob_regex(pattern: str) -> str:
-    """Translate fnmatch's anchored glob to PostgreSQL ARE, with literal SQL params.
+def _glob_class(content: str) -> str:
+    """Literal characters/ranges; descending ranges contribute no characters."""
+    negate = content.startswith("!")
+    if negate:
+        content = content[1:]
+    terms = []
+    i = 0
+    while i < len(content):
+        if i + 2 < len(content) and content[i + 1] == "-":
+            start, end = content[i], content[i + 2]
+            if start <= end:
+                terms.append(re.escape(start) + "-" + re.escape(end))
+            i += 3
+        else:
+            terms.append(re.escape(content[i]))
+            i += 1
+    # fnmatch interprets a leading ! after discarding descending ranges too.
+    if not negate and terms and terms[0].startswith("!"):
+        negate = True
+        terms[0] = terms[0][1:]
+        if not terms[0]:
+            terms.pop(0)
+    if not terms:
+        return "." if negate else "(?!)"
+    return "[" + ("^" if negate else "") + "".join(terms) + "]"
 
-    Python 3.11 optimizes star groups with atomic groups; removing their atomic
-    execution preserves the accepted language. PostgreSQL accepts only global
-    inline flags, so unwrap Python's outer scoped DOTALL group.
+
+def glob_regex(pattern: str) -> str:
+    """Compile the glob language directly to PostgreSQL ARE, not Python regex.
+
+    fnmatch remains the test oracle; its version-specific lookaheads, atomic
+    groups and named backreferences never enter database queries.
     """
-    translated = fnmatch.translate(pattern)
-    if not (translated.startswith("(?s:") and translated.endswith((r")\Z", r")\z"))):
-        raise RuntimeError("Unsupported fnmatch translation shape")
-    return r"(?s)\A" + translated[4:-3].replace("(?>", "(?:") + r"\Z"
+    parts = []
+    i = 0
+    while i < len(pattern):
+        char = pattern[i]
+        i += 1
+        if char == "*":
+            if not parts or parts[-1] != ".*":
+                parts.append(".*")
+        elif char == "?":
+            parts.append(".")
+        elif char == "[":
+            end = i + (i < len(pattern) and pattern[i] == "!")
+            if end < len(pattern) and pattern[end] == "]":
+                end += 1
+            end = pattern.find("]", end)
+            if end == -1:
+                parts.append(r"\[")
+            else:
+                parts.append(_glob_class(pattern[i:end]))
+                i = end + 1
+        else:
+            parts.append(re.escape(char))
+    return r"(?s)\A" + "".join(parts) + r"\Z"
 
 
 def list_tickets(service, conn, schema, filters, fields):

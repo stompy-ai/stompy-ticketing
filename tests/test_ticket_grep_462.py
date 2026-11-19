@@ -12,6 +12,7 @@ from psycopg2.extras import RealDictCursor
 from stompy_ticketing.models import TicketListFilters
 from stompy_ticketing.schema import get_tickets_table_sql
 from stompy_ticketing.service import TicketService
+from stompy_ticketing.ticket_listing import glob_regex
 from tests.test_cluster_c_fixes import _register, _run
 
 SCHEMA = "grep_462"
@@ -143,3 +144,56 @@ def test_offset_past_matching_set_keeps_its_total(native_db):
     )
     assert result.tickets == [] and result.total == 3 and not result.has_more
     assert result.by_status == {"backlog": 2, "in_progress": 1}
+
+
+def test_native_bracket_classes_match_oracle(native_db):
+    names = ["", "a", "b", "c", "-", "]", "[", "^", "&", "\\", "\n", "aab"]
+    patterns = [
+        "[a-c]",
+        "[!a-c]",
+        "[c-a]",
+        "[!c-a]",
+        "[-a]",
+        "[a-]",
+        "[]a]",
+        "[!]]",
+        "[[]",
+        "[^a]",
+        "[a--b]",
+        "[a-b-c]",
+        "[a&&b]",
+        "[\\]",
+        "[",
+        "[!]",
+        "[a--!]",
+        "[[:alpha:]]",
+    ]
+    with native_db.cursor() as cur:
+        for pattern in patterns:
+            cur.execute(
+                "SELECT value FROM unnest(%s::text[]) AS value "
+                'WHERE value COLLATE "C" ~ %s',
+                (names, glob_regex(pattern)),
+            )
+            assert [row["value"] for row in cur.fetchall()] == fnmatch.filter(
+                names, pattern
+            )
+
+
+def test_native_mcp_invalid_pattern_is_a_client_refusal(native_db):
+    import json
+
+    tools, _ = _register(db_factory=lambda _: native_db)
+    original = TicketService().list_tickets
+    with (
+        patch("stompy_ticketing.ticket_listing.glob_regex", return_value="["),
+        patch(
+            "stompy_ticketing.mcp_tools.TicketService.list_tickets",
+            wraps=lambda conn, schema, filters, **kw: original(
+                conn, SCHEMA, filters, **kw
+            ),
+        ),
+    ):
+        result = json.loads(_run(tools["ticket"](action="list", grep="a*")))
+    assert result["error_type"] == "ValueError"
+    assert result["error"] == "Title glob could not be matched; simplify the pattern"

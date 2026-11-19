@@ -979,7 +979,15 @@ class TicketService(ArchiveMixin, BoardMixin):
         from .ticket_listing import list_tickets
 
         sweep_if_due(self, conn, schema)  # throttled, never fails the read (3288)
-        return list_tickets(self, conn, schema, filters, fields)
+        from psycopg2.errors import InvalidRegularExpression
+
+        try:
+            return list_tickets(self, conn, schema, filters, fields)
+        except InvalidRegularExpression as exc:
+            if not (filters and filters.grep):
+                raise
+            conn.rollback()
+            raise ValueError("Title glob could not be matched; simplify the pattern") from exc
 
     @staticmethod
     def _build_or_tsquery_param(query: str) -> str:
