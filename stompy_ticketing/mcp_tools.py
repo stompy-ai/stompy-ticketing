@@ -12,7 +12,6 @@ Stompy internals.
 """
 
 import contextvars
-import fnmatch
 import json
 import time as _time
 from typing import Annotated, Any, Callable, List, Literal, Optional, Union
@@ -614,28 +613,12 @@ def register_ticketing_tools(
                         priority=Priority(priority) if priority else None,
                         assignee=assignee,
                         tags=tags,
+                        grep=grep,
                         limit=effective_limit,
                         offset=effective_offset,
                         include_archived=include_archived,
                     )
                     result = service.list_tickets(conn, schema, filters, fields=fields or "card")
-                    if grep and hasattr(result, "tickets"):
-                        result.tickets = [
-                            t for t in result.tickets
-                            if fnmatch.fnmatch(t.title if hasattr(t, "title") else t.get("title", ""), grep)
-                        ]
-                        result.total = len(result.tickets)
-                        # Recompute aggregates over the grep-filtered set so
-                        # by_status / by_type match what the caller sees.
-                        result.by_status = {}
-                        result.by_type = {}
-                        for t in result.tickets:
-                            t_status = t.status if hasattr(t, "status") else t.get("status")
-                            t_type = t.type if hasattr(t, "type") else t.get("type")
-                            if t_status:
-                                result.by_status[t_status] = result.by_status.get(t_status, 0) + 1
-                            if t_type:
-                                result.by_type[t_type] = result.by_type.get(t_type, 0) + 1
                     return _safe_json(result)
 
                 elif action == "list_tags":

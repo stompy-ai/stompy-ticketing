@@ -313,35 +313,34 @@ class TestBug173BoardLinks:
 
 class TestBug180GrepAggregates:
     def test_grep_filter_recomputes_by_status(self):
-        # Pre-grep: 3 tickets (2 backlog, 1 in_progress, all type=task).
+        # Service returns the whole filtered counts, even for a small page.
         # Grep "auth*" matches only "auth login" and "auth logout".
         mock_svc = MagicMock()
         mock_result = TicketListResponse(
             tickets=[
                 TicketResponse(id=1, title="auth login", type="task", status="backlog", priority="medium"),
-                TicketResponse(id=2, title="auth logout", type="task", status="in_progress", priority="medium"),
-                TicketResponse(id=3, title="search", type="task", status="backlog", priority="medium"),
             ],
-            total=3,
-            limit=20,
+            total=2,
+            limit=1,
             offset=0,
-            has_more=False,
-            by_status={"backlog": 2, "in_progress": 1},
-            by_type={"task": 3},
+            has_more=True,
+            by_status={"backlog": 1, "in_progress": 1},
+            by_type={"task": 2},
         )
         mock_svc.list_tickets.return_value = mock_result
 
         tools, _ = _register(mock_svc=mock_svc)
         # Use json fallback path by checking presence of expected keys.
         from toon import decode as toon_decode
-        raw = _run(tools["ticket"](action="list", grep="auth*"))
+        raw = _run(tools["ticket"](action="list", grep="auth*", limit=1))
         try:
             data = toon_decode(raw)
         except Exception:
             data = json.loads(raw)
 
-        # After grep, only 2 tickets remain (backlog + in_progress).
-        # Aggregates should reflect the filtered set.
+        # A page of one must retain both matches in whole-set aggregates.
+        assert data["has_more"] is True
+        assert mock_svc.list_tickets.call_args.args[2].grep == "auth*"
         assert data["total"] == 2
         assert data["by_status"] == {"backlog": 1, "in_progress": 1}
         assert data["by_type"] == {"task": 2}
