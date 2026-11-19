@@ -25,6 +25,7 @@ from stompy_ticketing.archive_actions import archive_action
 from stompy_ticketing.refs import TicketRefError, coerce_ticket_ref, format_display_id
 from stompy_ticketing.ticket_projection import get_view, status_change as _status_change
 from stompy_ticketing.safe_regex import compile_search_regex
+from stompy_ticketing.response_encoding import toon_encode as _toon_encode
 
 from psycopg2 import OperationalError as _OperationalError
 
@@ -47,15 +48,6 @@ from stompy_ticketing.service import (
     LinkRefusedError,
     TicketService,
 )
-
-
-def _toon_encode(data):
-    """Encode as TOON (Token-Oriented Object Notation), JSON fallback."""
-    try:
-        from toon import encode
-        return encode(data)
-    except Exception:
-        return json.dumps(data, default=str)
 
 
 # Display-id prefix for the CURRENT tool call (request-scoped by contextvar —
