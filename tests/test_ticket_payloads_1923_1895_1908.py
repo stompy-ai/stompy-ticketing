@@ -25,7 +25,6 @@ Contract pinned here:
 """
 
 import asyncio
-import json
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -42,6 +41,7 @@ from stompy_ticketing.service import (
     find_transition_path,
     validate_transition,
 )
+from tests.tool_response import parse_tool_response as _parse
 
 FIXED_TIME = 1700000000.0
 SCHEMA = "test_project"
@@ -90,10 +90,16 @@ class TestListAndSearchReturnCards:
     def setup_method(self):
         self.service = TicketService()
 
+    @pytest.mark.usefixtures("known_ticket_card_columns")
     def test_list_default_rows_are_cards(self):
         conn, cur = _conn([_row(id=1), _row(id=2)])
-        # list_tickets runs: archive sweep, main select, count, by_status, by_type
-        cur.fetchall.side_effect = [[], [_row(id=1), _row(id=2)], [], []]
+        # The card SELECT returns the already-bounded projection; full/get
+        # controls below keep their complete rows.
+        rows = [_row(id=1), _row(id=2)]
+        for row in rows:
+            row["description_chars"] = len(row.pop("description"))
+            row["description_preview"] = "x" * 100 + "..."
+        cur.fetchall.side_effect = [[], rows, [], []]
 
         result = self.service.list_tickets(conn, SCHEMA, TicketListFilters())
 
@@ -228,13 +234,6 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def _parse(text):
-    try:
-        from toon import decode
-
-        return decode(text)
-    except Exception:
-        return json.loads(text)
 
 
 class TestEncoderOmitsNoise:
@@ -269,7 +268,7 @@ class TestMoveAnswersWithTheChange:
         )
         out = _parse(_run(tools["ticket"](action="move", ticket_id=7, status="confirmed", project=SCHEMA)))
 
-        assert out["status"] == "transitioned"
+        assert out["action"] == "transitioned"
         assert out["ticket"]["id"] == 7
         assert out["ticket"]["status"] == "confirmed"
         assert out["ticket"]["previous_status"] == "triage"
@@ -299,7 +298,7 @@ class TestMoveAnswersWithTheChange:
         )
         out = _parse(_run(tools["ticket"](action="close", ticket_id=7, project=SCHEMA)))
 
-        assert out["status"] == "closed"
+        assert out["action"] == "closed"
         assert out["ticket"]["status"] == "resolved"
         assert "description" not in out["ticket"]
 

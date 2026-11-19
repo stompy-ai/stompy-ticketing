@@ -6,6 +6,7 @@ from typing import Any, List
 from psycopg2 import sql
 
 from .models import TicketListFilters, TicketListResponse
+from .ticket_projection import list_card_projection, row_to_card
 
 
 def _glob_class(content: str) -> str:
@@ -121,10 +122,14 @@ def list_tickets(service, conn, schema, filters, fields):
     if where_clauses:
         where_sql = "WHERE " + " AND ".join(where_clauses)
 
+    projection, select_params = (
+        (sql.SQL("*"), []) if fields == "full"
+        else list_card_projection(conn, cur, schema, service)
+    )
     # Get filtered tickets
     cur.execute(
         sql.SQL("""
-        SELECT * FROM {}.tickets
+        SELECT {} FROM {}.tickets
         {}
         ORDER BY
             CASE priority
@@ -136,19 +141,10 @@ def list_tickets(service, conn, schema, filters, fields):
             END,
             updated_at DESC
         LIMIT %s OFFSET %s
-        """).format(sql.Identifier(schema), sql.SQL(where_sql)),
-        params + [filters.limit, filters.offset],
+        """).format(projection, sql.Identifier(schema), sql.SQL(where_sql)),
+        select_params + params + [filters.limit, filters.offset],
     )
     rows = cur.fetchall()
-
-    # Get total count
-    cur.execute(
-        sql.SQL("SELECT COUNT(*) as count FROM {}.tickets {}").format(
-            sql.Identifier(schema), sql.SQL(where_sql)
-        ),
-        params,
-    )
-    total = cur.fetchone()["count"]
 
     # Get counts by status
     cur.execute(
@@ -158,6 +154,7 @@ def list_tickets(service, conn, schema, filters, fields):
         params,
     )
     by_status = {r["status"]: r["count"] for r in cur.fetchall()}
+    total = sum(by_status.values())
 
     # Get counts by type
     cur.execute(
@@ -168,9 +165,7 @@ def list_tickets(service, conn, schema, filters, fields):
     )
     by_type = {r["type"]: r["count"] for r in cur.fetchall()}
 
-    tickets = [service._row_to_response(r) for r in rows]
-    if fields != "full":
-        tickets = [service.to_card(t) for t in tickets]
+    tickets = [service._row_to_response(r) if fields == "full" else row_to_card(r) for r in rows]
     return TicketListResponse(
         tickets=tickets,
         total=total,

@@ -11,14 +11,14 @@ dementia-production's test suite asserts the same key set. RED first:
 written before stompy_ticketing.errors existed.
 """
 
-import json
 
 from stompy_ticketing.errors import mcp_error, not_found_error, recoverable_error
+from tests.tool_response import parse_tool_response
 
 
 class TestMcpError:
     def test_shape_matches_host_contract(self):
-        result = json.loads(mcp_error("INVALID_INPUT", "bad thing"))
+        result = parse_tool_response(mcp_error("INVALID_INPUT", "bad thing"))
 
         assert result["success"] is False
         assert result["error"] == "INVALID_INPUT"
@@ -26,14 +26,14 @@ class TestMcpError:
         assert "recovery" not in result
 
     def test_details_are_merged_in(self):
-        result = json.loads(mcp_error("INVALID_INPUT", "bad thing", {"ticket_id": 5}))
+        result = parse_tool_response(mcp_error("INVALID_INPUT", "bad thing", {"ticket_id": 5}))
 
         assert result["ticket_id"] == 5
 
 
 class TestRecoverableError:
     def test_shape_matches_host_contract(self):
-        result = json.loads(
+        result = parse_tool_response(
             recoverable_error("NOT_FOUND", "gone", ["step one", "step two"])
         )
 
@@ -43,7 +43,7 @@ class TestRecoverableError:
         assert result["recovery"] == {"can_retry": True, "steps": ["step one", "step two"]}
 
     def test_details_are_merged_in(self):
-        result = json.loads(
+        result = parse_tool_response(
             recoverable_error("NOT_FOUND", "gone", ["retry"], {"ticket_id": 99999})
         )
 
@@ -52,7 +52,7 @@ class TestRecoverableError:
 
 class TestNotFoundError:
     def test_names_the_entity_and_ref(self):
-        result = json.loads(not_found_error("Ticket", 99999))
+        result = parse_tool_response(not_found_error("Ticket", 99999))
 
         assert result["success"] is False
         assert result["error"] == "NOT_FOUND"

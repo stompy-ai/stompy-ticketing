@@ -25,6 +25,7 @@ import psycopg2.errors
 import pytest
 
 from stompy_ticketing.mcp_tools import register_ticketing_tools
+from tests.tool_response import parse_tool_response
 
 _SECRET = "SELECT secret FROM s1.t host s1.db"
 _FAILURES = {
@@ -88,7 +89,7 @@ def _tools(make_exc):
 
 
 def _call(name, make_exc):
-    return json.loads(asyncio.run(_tools(make_exc)[name](**_CALLS[name])))
+    return parse_tool_response(asyncio.run(_tools(make_exc)[name](**_CALLS[name])))
 
 
 _TOOLS = sorted(_CALLS)
@@ -153,11 +154,11 @@ class ProjectWriteDenied(Exception):
 def test_host_access_refusals_keep_their_client_error_type(name):
     out = _call(name, lambda: ProjectWriteDenied("You have read-only access to project 'p'"))
     assert out["error_type"] == "ProjectWriteDenied"  # unchanged: a guard, green before and after
-    assert "You have read-only access to project 'p'" in out["error"]
+    assert "You have read-only access to project 'p'" in out["message"]
 
 
 @pytest.mark.parametrize("name", ["ticket_board", "ticket_search"])
 def test_our_value_errors_stay_client_refusals(name):
     out = _call(name, lambda: ValueError("limit must be positive"))
     assert out["error_type"] == "ValueError"  # unchanged: a guard, green before and after
-    assert "limit must be positive" in out["error"]
+    assert "limit must be positive" in out["message"]

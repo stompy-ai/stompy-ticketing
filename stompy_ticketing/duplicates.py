@@ -156,4 +156,8 @@ def response_fields(hints: Optional[List[Dict[str, Any]]]) -> Dict[str, Any]:
         return {"duplicate_check": "unavailable"}
     if not hints:
         return {"possible_duplicates": []}
-    return {"possible_duplicates": hints, "duplicate_guidance": GUIDANCE}
+    guidance = (
+        GUIDANCE if any(float(hint.get("similarity", 0)) >= 0.5 for hint in hints)
+        else "Similar open tickets; compare their scope before deciding whether to reuse one."
+    )
+    return {"possible_duplicates": hints, "duplicate_guidance": guidance}

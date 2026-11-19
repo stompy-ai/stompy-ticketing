@@ -36,6 +36,36 @@ def row_to_response(row):
     )
 
 
+def row_to_card(row):
+    """The SQL row already contains only the card's bounded text."""
+    card = row_to_response(row)
+    card.description_preview = row.get("description_preview")
+    card.description_chars = row.get("description_chars")
+    return card
+
+
+def list_card_projection(conn, cur, schema, service):
+    """Reuse board's optional-column census; never serialize a full row to JSON."""
+    from psycopg2 import sql
+
+    from stompy_ticketing.board_view import CARD_COLUMNS, _column, _ticket_columns
+
+    # SELECT * tolerated delete/recreate with a legacy column set. Keep that
+    # property: a prior complete table's cached columns do not prove this one.
+    present = _ticket_columns(conn, cur, schema, fresh=True)
+    columns = [_column(name, present) for name in CARD_COLUMNS]
+    columns.append(sql.SQL(
+        "CASE WHEN description IS NULL OR description = '' THEN NULL "
+        "WHEN char_length(description) > %s THEN left(description, %s) || %s "
+        "ELSE description END AS description_preview"
+    ))
+    columns.append(sql.SQL("coalesce(char_length(description), 0) AS description_chars"))
+    return sql.SQL(", ").join(columns), [
+        service.BOARD_DESC_MAX_LENGTH + len(service.BOARD_DESC_ELLIPSIS),
+        service.BOARD_DESC_MAX_LENGTH, service.BOARD_DESC_ELLIPSIS,
+    ]
+
+
 def status_change(ticket):
     """Preserve the compact transition payload independently of history order."""
     status_rows = [

@@ -36,16 +36,11 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
-from toon import decode as toon_decode
 
 from stompy_ticketing.mcp_tools import register_ticketing_tools
+from tests.tool_response import parse_tool_response as _parse
 
 
-def _parse(text):
-    try:
-        return toon_decode(text)
-    except Exception:
-        return json.loads(text)
 
 
 def _make_mock_mcp():
@@ -170,7 +165,7 @@ class TestTheControlsThatMustStayGreen:
         """
         svc = MagicMock()
         raw = asyncio.run(_tools(svc)["ticket"](action="update"))
-        assert "ticket_id" in _parse(raw)["error"]
+        assert "ticket_id" in _parse(raw)["message"]
 
     def test_the_status_guard_is_unchanged(self):
         """action=update with status= still tells the caller to use move."""
@@ -178,6 +173,6 @@ class TestTheControlsThatMustStayGreen:
         raw = asyncio.run(
             _tools(svc)["ticket"](action="update", ticket_id=1, status="in_progress")
         )
-        err = _parse(raw)["error"].lower()
+        err = _parse(raw)["message"].lower()
         assert "move" in err
         svc.update_ticket.assert_not_called()

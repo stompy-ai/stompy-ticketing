@@ -12,7 +12,6 @@ Stompy internals.
 """
 
 import contextvars
-import json
 import time as _time
 from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 
@@ -24,6 +23,7 @@ from stompy_ticketing.archival import ArchiveRefused
 from stompy_ticketing.archive_actions import archive_action
 from stompy_ticketing.refs import TicketRefError, coerce_ticket_ref, format_display_id
 from stompy_ticketing.ticket_projection import get_view, status_change as _status_change
+from stompy_ticketing.ticket_answers import present_answer, present_ticket_fields
 from stompy_ticketing.safe_regex import compile_search_regex
 from stompy_ticketing.response_encoding import toon_encode as _toon_encode
 
@@ -91,20 +91,22 @@ def _stamp_urls(data: Any) -> Any:
         return data
 
 
-def _decorate_display_ids(obj: Any, prefix) -> Any:
+def _decorate_display_ids(obj: Any, prefix, *, present: bool = True) -> Any:
     """Recursively add display_id to anything that looks like a ticket dict.
 
     Runs BEFORE the host's stamper (STOMPY-1929) so a card already carries the
     display_id its address is built from.
     """
     if isinstance(obj, dict):
-        if isinstance(obj.get("id"), int) and "title" in obj and "status" in obj:
+        if present:
+            present_ticket_fields(obj)
+        if prefix and isinstance(obj.get("id"), int) and "title" in obj and "status" in obj:
             obj.setdefault("display_id", format_display_id(prefix, obj["id"]))
-        for v in obj.values():
-            _decorate_display_ids(v, prefix)
+        for key, value in obj.items():
+            _decorate_display_ids(value, prefix, present=present and key != "metadata")
     elif isinstance(obj, list):
         for v in obj:
-            _decorate_display_ids(v, prefix)
+            _decorate_display_ids(v, prefix, present=present)
     return obj
 
 
@@ -122,13 +124,13 @@ def _safe_json(data: Any) -> str:
             data = data.model_dump()
         elif hasattr(data, "dict"):
             data = data.dict()
+        data = present_answer(data)
         _prefix = _display_prefix.get()
-        if _prefix:
-            data = _decorate_display_ids(data, _prefix)
+        data = _decorate_display_ids(data, _prefix)
         data = _stamp_urls(data)
         return _toon_encode(_omit_empty(data))
     except Exception as e:
-        return json.dumps({"error": str(e)})
+        return mcp_error('RESPONSE_ENCODING_FAILED', str(e))
 
 
 def _card_with_size(ticket) -> dict:
@@ -355,10 +357,7 @@ def register_ticketing_tools(
 
         Claims bump updated_at: re-read after claiming. For manual claiming, use update with expected_updated_at from your last read; CONFLICT means re-read. Append remains atomic and unguarded.
 
-        Initial statuses: task→backlog, bug→triage, feature→proposed, decision→open.
-        Terminal: task→done/cancelled, bug→resolved/wont_fix, feature→shipped/rejected, decision→decided/deferred.
-        Stalled in_progress steps back: task→backlog, bug→confirmed, feature→approved.
-        Parked ("not now", every type): from backlog/triage/confirmed/proposed/approved/open, back in one step; hidden from the board like terminals; list with status='parked'."""
+        Refusals name the workflow alternatives. To finish a ticket, use close."""
         _prefix_token = None
         try:
             # Dual-format ref coercion (design 2026-07-27): a prefixed id
@@ -369,32 +368,22 @@ def register_ticketing_tools(
                 _ref_project, ticket_id = coerce_ticket_ref(ticket_id, project, resolve_prefix_func)
                 if _ref_project != project:
                     if project is not None:
-                        return json.dumps({
-                            "error": f"Ticket ref belongs to project '{_ref_project}' "
-                            f"but project='{project}' was passed. Drop the project "
-                            "param or use a numeric id."
-                        })
+                        return mcp_error('PROJECT_MISMATCH', f"Ticket ref belongs to project '{_ref_project}' but project='{project}' was passed. Drop the project param or use a numeric id.")
                     project = _ref_project
                 if ticket_ids:
                     _parts = [x.strip() for x in str(ticket_ids).split(",") if x.strip()]
                     _coerced = [coerce_ticket_ref(x, project, resolve_prefix_func) for x in _parts]
                     _projects = {pr for pr, _ in _coerced if pr is not None} or {project}
                     if len(_projects) > 1:
-                        return json.dumps({
-                            "error": "Batch refs span multiple projects "
-                            f"({sorted(_projects)}) — batches are per-project."
-                        })
+                        return mcp_error('PROJECT_MISMATCH', f'Batch refs span multiple projects ({sorted(_projects)}) — batches are per-project.')
                     _only = _projects.pop()
                     if _only != project:
                         if project is not None:
-                            return json.dumps({
-                                "error": f"Batch refs belong to project '{_only}' "
-                                f"but project='{project}' was passed."
-                            })
+                            return mcp_error('PROJECT_MISMATCH', f"Batch refs belong to project '{_only}' but project='{project}' was passed.")
                         project = _only
                     ticket_ids = ",".join(str(i) for _, i in _coerced)
             except TicketRefError as e:
-                return json.dumps({"error": str(e)})
+                return mcp_error('INVALID_ARGUMENT', str(e))
 
             # Validation AFTER coercion: a prefixed ref may have just
             # supplied the project (review finding #5 — checking first
@@ -413,17 +402,14 @@ def register_ticketing_tools(
                 schema = _get_schema(project_name)
 
                 if expected_updated_at is not None and action != "update":
-                    return json.dumps({
-                        "error": "expected_updated_at only guards action=\"update\" — "
-                        "move/close have no stale-write protection yet (STOMPY-1579 follow-up)"
-                    })
+                    return mcp_error('EXPECTED_VERSION_NOT_APPLICABLE', 'expected_updated_at only guards action="update" — move/close have no stale-write protection yet (STOMPY-1579 follow-up)')
 
                 if dry_run and action != "create":
-                    return json.dumps({"error": "dry_run only applies to action=\"create\""})
+                    return mcp_error('DRY_RUN_NOT_APPLICABLE', 'dry_run only applies to action="create"')
 
                 if action == "create":
                     if not title:
-                        return json.dumps({"error": "title is required for create"})
+                        return mcp_error('TITLE_REQUIRED', 'title is required for create')
                     prefix = get_prefix_func(project_name) if get_prefix_func else None
                     if dry_run:
                         hints = duplicates.find_possible_duplicates(
@@ -446,7 +432,7 @@ def register_ticketing_tools(
                     )
                     return _safe_json({
                         "status": "created",
-                        "ticket": result.model_dump(),
+                        "ticket": _card_with_size(_decorate(result)),
                         **duplicates.response_fields(hints),
                     })
 
@@ -460,7 +446,7 @@ def register_ticketing_tools(
 
                 elif action == "get":
                     if not ticket_id:
-                        return json.dumps({"error": "ticket_id is required for get"})
+                        return mcp_error('TICKET_ID_REQUIRED', 'ticket_id is required for get')
                     result = service.get_ticket(conn, schema, ticket_id)
                     if not result:
                         return not_found_error("Ticket", ticket_id)
@@ -470,13 +456,13 @@ def register_ticketing_tools(
 
                 elif action == "append":
                     if not ticket_id or not description:
-                        return json.dumps({"error": "ticket_id and description are required for append"})
+                        return mcp_error('TICKET_ID_REQUIRED', 'ticket_id and description are required for append')
                     try:
                         result = service.append_description(
                             conn, schema, ticket_id, description, changed_by=_actor()
                         )
                     except ValueError as ve:
-                        return json.dumps({"error": str(ve)})
+                        return mcp_error('INVALID_ARGUMENT', str(ve))
                     if not result:
                         return not_found_error("Ticket", ticket_id)
                     # STOMPY-3721: a receipt, never the body. Echoing a 100k-char
@@ -488,13 +474,9 @@ def register_ticketing_tools(
 
                 elif action == "update":
                     if not ticket_id:
-                        return json.dumps({"error": "ticket_id is required for update"})
+                        return mcp_error('TICKET_ID_REQUIRED', 'ticket_id is required for update')
                     if status:
-                        return json.dumps({
-                            "error": "Status changes require action=\"move\", not \"update\". "
-                            "Use: ticket(action=\"move\", ticket_id="
-                            f"{ticket_id}, status=\"{status}\")"
-                        })
+                        return mcp_error('INVALID_ARGUMENT', f'Status changes require action="move", not "update". Use: ticket(action="move", ticket_id={ticket_id}, status="{status}")')
                     # STOMPY-2145. Every recognised field absent means there is
                     # nothing to write — and the caller almost certainly sent
                     # something we silently dropped. BUG-213: an agent passing
@@ -508,21 +490,7 @@ def register_ticketing_tools(
                     # this from a wall into a signpost — and `append` is what
                     # the agents hitting this actually wanted.
                     if not any(v is not None for v in (title, description, priority, assignee, tags)):
-                        return json.dumps({
-                            "error": "NOTHING_TO_UPDATE",
-                            "message": (
-                                "update changes nothing: none of title, description, "
-                                "priority, assignee or tags was supplied. Any other "
-                                "parameter is silently discarded before it reaches the "
-                                "server, so a value you passed may have been dropped."
-                            ),
-                            "hint": (
-                                "to add commentary or a report to a ticket use "
-                                "action=\"append\" with description=... (atomic, never "
-                                "clobbers concurrent edits); to change status use "
-                                "action=\"move\""
-                            ),
-                        })
+                        return mcp_error('NOTHING_TO_UPDATE', 'update changes nothing: none of title, description, priority, assignee or tags was supplied. Any other parameter is silently discarded before it reaches the server, so a value you passed may have been dropped.', {'hint': 'to add commentary or a report to a ticket use action="append" with description=... (atomic, never clobbers concurrent edits); to change status use action="move"'})
                     tag_list = [t.strip() for t in tags.split(",")] if tags else None
                     data = TicketUpdate(
                         title=title,
@@ -550,6 +518,7 @@ def register_ticketing_tools(
                         )
                     except service.Conflict as c:
                         return _safe_json({
+                            "success": False,
                             "error": "CONFLICT",
                             "message": str(c),
                             "expected_updated_at": c.expected_updated_at,
@@ -558,13 +527,11 @@ def register_ticketing_tools(
                         })
                     if not result:
                         return not_found_error("Ticket", ticket_id)
-                    return _safe_json({"status": "updated", "ticket": result.model_dump()})
+                    return _safe_json({"status": "updated", "ticket": _card_with_size(_decorate(result))})
 
                 elif action == "move":
                     if not ticket_id or not status:
-                        return json.dumps(
-                            {"error": "ticket_id and status are required for move"}
-                        )
+                        return mcp_error('TICKET_ID_REQUIRED', 'ticket_id and status are required for move')
                     result = service.transition_ticket(
                         conn, schema, ticket_id, status, changed_by=_actor(),
                         reason=reason, revisit_by=revisit_by,
@@ -624,7 +591,7 @@ def register_ticketing_tools(
 
                 elif action == "close":
                     if not ticket_id:
-                        return json.dumps({"error": "ticket_id is required for close"})
+                        return mcp_error('TICKET_ID_REQUIRED', 'ticket_id is required for close')
                     result = service.close_ticket(
                         conn, schema, ticket_id, resolution=resolution, changed_by=_actor(),
                     )
@@ -639,13 +606,11 @@ def register_ticketing_tools(
 
                 elif action == "batch_move":
                     if not ticket_ids or not status:
-                        return json.dumps(
-                            {"error": "ticket_ids and status are required for batch_move"}
-                        )
+                        return mcp_error('TICKET_ID_REQUIRED', 'ticket_ids and status are required for batch_move')
                     try:
                         parsed_ids = [int(x.strip()) for x in ticket_ids.split(",")]
                     except ValueError:
-                        return json.dumps({"error": "ticket_ids must be comma-separated integers"})
+                        return mcp_error('INVALID_ARGUMENT', 'ticket_ids must be comma-separated integers')
                     result = service.batch_transition(
                         conn, schema, parsed_ids, status,
                         confirm=confirm, changed_by=_actor(),
@@ -655,13 +620,11 @@ def register_ticketing_tools(
 
                 elif action == "batch_close":
                     if not ticket_ids:
-                        return json.dumps(
-                            {"error": "ticket_ids is required for batch_close"}
-                        )
+                        return mcp_error('TICKET_ID_REQUIRED', 'ticket_ids is required for batch_close')
                     try:
                         parsed_ids = [int(x.strip()) for x in ticket_ids.split(",")]
                     except ValueError:
-                        return json.dumps({"error": "ticket_ids must be comma-separated integers"})
+                        return mcp_error('INVALID_ARGUMENT', 'ticket_ids must be comma-separated integers')
                     result = service.batch_close(
                         conn, schema, parsed_ids,
                         confirm=confirm,
@@ -671,18 +634,11 @@ def register_ticketing_tools(
                     return _safe_json(result)
 
                 else:
-                    return json.dumps(
-                        {
-                            "error": f"Unknown action: {action}",
-                            "valid_actions": [
-                                "create", "get", "update", "append", "move", "list", "list_tags",
-                                "close", "archive", "batch_archive", "unarchive", "batch_move", "batch_close", "claim", "release", "claim_next",
-                            ],
-                        }
-                    )
+                    return mcp_error('UNKNOWN_ACTION', f'Unknown action: {action}', {'valid_actions': ['create', 'get', 'update', 'append', 'move', 'list', 'list_tags', 'close', 'archive', 'batch_archive', 'unarchive', 'batch_move', 'batch_close', 'claim', 'release', 'claim_next']})
 
         except (LeaseRefused, ArchiveRefused) as e:
-            return _safe_json(e.payload())
+            payload = e.payload()
+            return mcp_error(payload.pop("error"), payload.pop("message"), payload)
         except ParkArgumentError as e:
             return recoverable_error(
                 "PARK_ARGUMENT",
@@ -693,9 +649,9 @@ def register_ticketing_tools(
                 ],
             )
         except InvalidTransitionError as e:
-            return json.dumps({"error": str(e), "error_type": "InvalidTransition"})
+            return mcp_error("INVALID_TRANSITION", str(e), {"error_type": "InvalidTransition", "allowed_next": getattr(e, "allowed_next", []), "next": ("Choose a terminal resolution from allowed_next" if action == "close" else "To finish the ticket, use action=close; otherwise choose an allowed next status")})
         except ValueError as e:
-            return json.dumps({"error": str(e), "error_type": "ValueError"})
+            return mcp_error('INVALID_ARGUMENT', str(e), {'error_type': 'ValueError'})
         except Exception as e:
             return caught_error_answer(
                 e, "ticket", code="TICKET_FAILED", failed="Ticket operation failed",
@@ -742,23 +698,15 @@ def register_ticketing_tools(
             _tgt_project, target_id = coerce_ticket_ref(target_id, project, resolve_prefix_func)
             if _src_project != project:
                 if project is not None:
-                    return json.dumps({
-                        "error": f"Source ref belongs to project '{_src_project}' "
-                        f"but project='{project}' was passed."
-                    })
+                    return mcp_error('PROJECT_MISMATCH', f"Source ref belongs to project '{_src_project}' but project='{project}' was passed.")
                 project = _src_project
             if target_id is not None and _tgt_project != project:
                 # minimal: cross-project links need a target_ref column on
                 # ticket_links (FKs are per-schema). Explicit refusal, not a
                 # silent mangle — revisit with the follow-up ticket.
-                return json.dumps({
-                    "error": f"Cross-project links are not supported yet "
-                    f"(target resolves to '{_tgt_project}', source is "
-                    f"'{project}'). Reference the ticket id in the "
-                    "description for now."
-                })
+                return mcp_error('PROJECT_MISMATCH', f"Cross-project links are not supported yet (target resolves to '{_tgt_project}', source is '{project}'). Reference the ticket id in the description for now.")
         except TicketRefError as e:
-            return json.dumps({"error": str(e)})
+            return mcp_error('INVALID_ARGUMENT', str(e))
 
         project_check = check_project_func(project)
         if project_check:
@@ -778,9 +726,7 @@ def register_ticketing_tools(
                     if context_label:
                         # Ticket-to-context link
                         if not ticket_id:
-                            return json.dumps(
-                                {"error": "ticket_id is required for context link add"}
-                            )
+                            return mcp_error('TICKET_ID_REQUIRED', 'ticket_id is required for context link add')
                         # Validate link_type for context links
                         ctx_link_types = {e.value for e in ContextLinkType}
                         effective_link_type = link_type or "related"
@@ -796,9 +742,7 @@ def register_ticketing_tools(
                     else:
                         # Ticket-to-ticket link
                         if not ticket_id or not target_id:
-                            return json.dumps(
-                                {"error": "ticket_id and target_id are required for ticket link add"}
-                            )
+                            return mcp_error('TICKET_ID_REQUIRED', 'ticket_id and target_id are required for ticket link add')
                         # Validate link_type for ticket links
                         ticket_link_types = {e.value for e in LinkType}
                         effective_link_type = link_type or "related"
@@ -813,7 +757,7 @@ def register_ticketing_tools(
 
                 elif action == "remove":
                     if not link_id:
-                        return json.dumps({"error": "link_id is required for remove"})
+                        return mcp_error('LINK_ID_REQUIRED', 'link_id is required for remove')
                     # Try ticket-to-ticket link first, then context link
                     # STOMPY-2985: a given ticket_id scopes the removal to its own links.
                     removed = service.remove_link(conn, schema, link_id, ticket_id=ticket_id)
@@ -822,12 +766,12 @@ def register_ticketing_tools(
                             conn, schema, link_id, ticket_id=ticket_id
                         )
                     if not removed:
-                        return json.dumps({"error": f"Link {link_id} not found"})
-                    return json.dumps({"status": "removed", "link_id": link_id})
+                        return mcp_error('LINK_NOT_FOUND', f'Link {link_id} not found')
+                    return _safe_json({"status": "removed", "link_id": link_id})
 
                 elif action == "list":
                     if not ticket_id:
-                        return json.dumps({"error": "ticket_id is required for list"})
+                        return mcp_error('TICKET_ID_REQUIRED', 'ticket_id is required for list')
                     ticket_links = service.list_links(conn, schema, ticket_id)
                     context_links = service.list_context_links_for_ticket(conn, schema, ticket_id)
                     return _safe_json({
@@ -837,17 +781,13 @@ def register_ticketing_tools(
                     })
 
                 else:
-                    return json.dumps(
-                        {"error": f"Unknown action: {action}", "valid_actions": ["add", "remove", "list"]}
-                    )
+                    return mcp_error('UNKNOWN_ACTION', f'Unknown action: {action}', {'valid_actions': ['add', 'remove', 'list']})
 
         except LinkRefusedError as e:
             # error_type stays "ValueError": the host books that as a client refusal.
-            return json.dumps({"error": str(e), "error_type": "ValueError", "code": e.code})
+            return mcp_error(e.code, str(e), {'error_type': 'ValueError', 'code': e.code})
         except LinkAlreadyExistsError as e:
-            return json.dumps(
-                {"error": str(e), "error_type": "ALREADY_LINKED"}
-            )
+            return mcp_error('ALREADY_LINKED', str(e), {'error_type': 'ALREADY_LINKED'})
         except Exception as e:
             return caught_error_answer(
                 e, "ticket_link", code="LINK_FAILED", failed="Link operation failed",
@@ -948,7 +888,7 @@ def register_ticketing_tools(
             try:
                 compiled_regex = compile_search_regex(regex)
             except ValueError as exc:
-                return json.dumps({"error": str(exc)})
+                return mcp_error('INVALID_ARGUMENT', str(exc))
 
         _sr_tok = None
         try:

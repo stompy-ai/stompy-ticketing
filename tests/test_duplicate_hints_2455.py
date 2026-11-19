@@ -186,7 +186,7 @@ def test_mcp_create_returns_the_hints_and_the_guidance(monkeypatch):
     out = _parse(asyncio.run(_ticket_tool()(
         action="create", title="New", description="Body", project="proj",
     )))
-    assert out["status"] == "created" and out["ticket"]["id"] == 12
+    assert out["action"] == "created" and out["ticket"]["id"] == 12
     assert out["possible_duplicates"][0]["display_id"] == "PROJ-5"
     assert out["possible_duplicates"][0]["similarity"] == 0.72
     assert out["duplicate_guidance"] == duplicates.GUIDANCE
@@ -199,7 +199,7 @@ def test_mcp_create_without_similar_tickets_says_nothing_extra(monkeypatch):
     monkeypatch.setattr(duplicates, "find_possible_duplicates", MagicMock(return_value=[]))
     monkeypatch.setattr(TicketService, "create_ticket", lambda *a, **k: _created(13))
     out = _parse(asyncio.run(_ticket_tool()(action="create", title="New", project="proj")))
-    assert out["status"] == "created"
+    assert out["action"] == "created"
     assert "possible_duplicates" not in out and "duplicate_guidance" not in out
 
 
@@ -207,7 +207,7 @@ def test_mcp_create_survives_a_failed_check_and_says_so(monkeypatch):
     monkeypatch.setattr(duplicates, "find_possible_duplicates", MagicMock(return_value=None))
     monkeypatch.setattr(TicketService, "create_ticket", lambda *a, **k: _created(14))
     out = _parse(asyncio.run(_ticket_tool()(action="create", title="New", project="proj")))
-    assert out["status"] == "created" and out["ticket"]["id"] == 14
+    assert out["action"] == "created" and out["ticket"]["id"] == 14
     assert out["duplicate_check"] == "unavailable"
 
 
@@ -222,11 +222,11 @@ def test_mcp_create_dry_run_returns_candidates_and_writes_nothing(monkeypatch):
         action="create", title="New", description="Body", project="proj", dry_run=True,
     )))
     create.assert_not_called()
-    assert out["status"] == "dry_run"
+    assert out["action"] == "dry_run"
     assert out["possible_duplicates"][0]["id"] == 5
     assert find.call_args.kwargs["exclude_id"] is None
 
 
 def test_dry_run_is_refused_outside_create(monkeypatch):
     out = _parse(asyncio.run(_ticket_tool()(action="get", ticket_id=1, project="proj", dry_run=True)))
-    assert "dry_run" in out["error"]
+    assert "dry_run" in out["message"]

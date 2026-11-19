@@ -7,11 +7,11 @@ stompy_ticketing.errors.not_found_error.
 """
 
 import asyncio
-import json
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 from stompy_ticketing.mcp_tools import register_ticketing_tools
+from tests.tool_response import parse_tool_response
 
 
 def _make_mock_mcp():
@@ -64,7 +64,7 @@ class TestTicketNotFoundEnvelope:
         ticket_fn = _register("get_ticket", return_value=None)
 
         result = _run(ticket_fn(action="get", ticket_id=99999, project="test_project"))
-        parsed = json.loads(result)
+        parsed = parse_tool_response(result)
 
         assert parsed["success"] is False
         assert parsed["error"] == "NOT_FOUND"
@@ -78,7 +78,7 @@ class TestTicketNotFoundEnvelope:
         result = _run(
             ticket_fn(action="close", ticket_id=99999, project="test_project")
         )
-        parsed = json.loads(result)
+        parsed = parse_tool_response(result)
 
         assert parsed["success"] is False
         assert parsed["error"] == "NOT_FOUND"
@@ -93,7 +93,7 @@ class TestTicketNotFoundEnvelope:
                 action="move", ticket_id=99999, status="done", project="test_project"
             )
         )
-        parsed = json.loads(result)
+        parsed = parse_tool_response(result)
 
         assert parsed["error"] == "NOT_FOUND"
         assert "recovery" in parsed
@@ -106,7 +106,7 @@ class TestTicketNotFoundEnvelope:
                 action="append", ticket_id=99999, description="x", project="test_project"
             )
         )
-        parsed = json.loads(result)
+        parsed = parse_tool_response(result)
 
         assert parsed["error"] == "NOT_FOUND"
         assert "recovery" in parsed
@@ -117,7 +117,7 @@ class TestTicketNotFoundEnvelope:
         result = _run(
             ticket_fn(action="update", ticket_id=99999, title="x", project="test_project")
         )
-        parsed = json.loads(result)
+        parsed = parse_tool_response(result)
 
         assert parsed["error"] == "NOT_FOUND"
         assert "recovery" in parsed

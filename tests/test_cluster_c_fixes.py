@@ -26,6 +26,7 @@ from stompy_ticketing.models import (
     TicketResponse,
 )
 from stompy_ticketing.service import LinkAlreadyExistsError, TicketService
+from tests.tool_response import parse_tool_response
 
 FIXED_TIME = 1700000000.0
 SCHEMA = "test_project"
@@ -107,10 +108,10 @@ class TestBug168AlreadyLinkedErrorType:
         result_text = _run(
             tools["ticket_link"](action="add", ticket_id=1, target_id=2)
         )
-        result = json.loads(result_text)
+        result = parse_tool_response(result_text)
 
         assert result["error_type"] == "ALREADY_LINKED"
-        assert "already exists" in result["error"].lower()
+        assert "already exists" in result["message"].lower()
 
     def test_context_link_already_exists_returns_already_linked_error_type(self):
         mock_svc = MagicMock()
@@ -122,7 +123,7 @@ class TestBug168AlreadyLinkedErrorType:
         result_text = _run(
             tools["ticket_link"](action="add", ticket_id=1, context_label="topic_x")
         )
-        result = json.loads(result_text)
+        result = parse_tool_response(result_text)
 
         assert result["error_type"] == "ALREADY_LINKED"
 
@@ -235,7 +236,7 @@ class TestBug133BoardRetry:
 
         tools, _ = _register(mock_svc=mock_svc)
         result_text = _run(tools["ticket_board"]())
-        result = json.loads(result_text)
+        result = parse_tool_response(result_text)
 
         # After one failed retry, the error surfaces — as our authored, retryable
         # connection code, never the driver's text (STOMPY-3089 follow-up).

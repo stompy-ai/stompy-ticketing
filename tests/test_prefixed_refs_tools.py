@@ -12,6 +12,7 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock
 
 from stompy_ticketing.mcp_tools import register_ticketing_tools
+from tests.tool_response import parse_tool_response
 
 FIXED_TIME = 1700000000.0
 
@@ -77,8 +78,8 @@ class TestPrefixedRefRouting:
     def test_explicit_project_conflict_is_refused(self):
         tools, seen = _register(resolve_prefix_func=_resolver)
         out = _run(tools["ticket"](action="get", ticket_id="BUG-188", project="stompy"))
-        payload = json.loads(out)
-        assert "belongs to project 'bug_inbox'" in payload["error"]
+        payload = parse_tool_response(out)
+        assert "belongs to project 'bug_inbox'" in payload["message"]
         assert seen["db_projects"] == []  # refused before any DB touch
 
     def test_digit_string_stays_in_current_project(self):
@@ -89,7 +90,7 @@ class TestPrefixedRefRouting:
     def test_unknown_prefix_errors_without_db_touch(self):
         tools, seen = _register(resolve_prefix_func=_resolver)
         out = _run(tools["ticket"](action="get", ticket_id="NOPE-1"))
-        assert "Unknown ticket prefix" in json.loads(out)["error"]
+        assert "Unknown ticket prefix" in parse_tool_response(out)["message"]
         assert seen["db_projects"] == []
 
     def test_batch_refs_spanning_projects_refused(self):
@@ -97,7 +98,7 @@ class TestPrefixedRefRouting:
         out = _run(tools["ticket"](
             action="batch_close", ticket_ids="BUG-1,STOMPY-2", confirm=True
         ))
-        assert "span multiple projects" in json.loads(out)["error"]
+        assert "span multiple projects" in parse_tool_response(out)["message"]
         assert seen["db_projects"] == []  # refused before any DB touch
 
 
@@ -107,8 +108,8 @@ class TestCrossProjectLinkRefusal:
         out = _run(tools["ticket_link"](
             action="add", ticket_id="STOMPY-1", target_id="BUG-2", link_type="related"
         ))
-        payload = json.loads(out)
-        assert "Cross-project links are not supported yet" in payload["error"]
+        payload = parse_tool_response(out)
+        assert "Cross-project links are not supported yet" in payload["message"]
         assert seen["db_projects"] == []
 
 
@@ -132,7 +133,7 @@ class TestBackwardCompat:
     def test_prefixed_ref_without_resolver_gives_guidance(self):
         tools, seen = _register(resolve_prefix_func=None)
         out = _run(tools["ticket"](action="get", ticket_id="STOMPY-1"))
-        assert "not supported by this host" in json.loads(out)["error"]
+        assert "not supported by this host" in parse_tool_response(out)["message"]
 
 
 class TestValidationOrdering:

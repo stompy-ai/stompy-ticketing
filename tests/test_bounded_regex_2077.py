@@ -13,6 +13,10 @@ import pytest
 from stompy_ticketing.mcp_tools import register_ticketing_tools
 from stompy_ticketing.models import SearchResult, TicketResponse
 from stompy_ticketing.safe_regex import compile_search_regex
+if __name__ == "__main__":
+    from tool_response import parse_tool_response
+else:
+    from tests.tool_response import parse_tool_response
 
 FIXED_TIME = 1700000000.0
 
@@ -70,7 +74,7 @@ def _ticket(id, title="ordinary", description="body"):
 def test_invalid_or_unsupported_regex_refused_before_database(pattern):
     search, db, _ = _registered_search([])
     with patch("stompy_ticketing.mcp_tools._toon_encode", side_effect=json.dumps):
-        payload = json.loads(asyncio.run(search(query="test", project="fixture", regex=pattern)))
+        payload = parse_tool_response(asyncio.run(search(query="test", project="fixture", regex=pattern)))
     assert "error" in payload
     db.assert_not_called()
 
@@ -85,7 +89,7 @@ def test_registered_search_matches_title_or_body_and_keeps_projection(fields):
         ]
     )
     with patch("stompy_ticketing.mcp_tools._toon_encode", side_effect=json.dumps):
-        payload = json.loads(
+        payload = parse_tool_response(
             asyncio.run(
                 search(
                     query="test",
@@ -134,7 +138,7 @@ async def _adversarial(carrier):
     sibling = asyncio.create_task(heartbeat())
     await ready.wait()
     with patch("stompy_ticketing.mcp_tools._toon_encode", side_effect=json.dumps):
-        payload = json.loads(await search(query="test", project="fixture", regex=r"(a+)+$"))
+        payload = parse_tool_response(await search(query="test", project="fixture", regex=r"(a+)+$"))
     await sibling
     assert "error" not in payload, payload
     assert payload["total"] == 0

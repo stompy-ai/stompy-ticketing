@@ -13,20 +13,19 @@ TicketUpdate body (the same way it carries expected_updated_at, STOMPY-2961).
 """
 
 import asyncio
-import json
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
-from toon import decode as toon_decode
 
 from stompy_ticketing.api_routes import configure_routes, router
 from stompy_ticketing.mcp_tools import register_ticketing_tools
 from stompy_ticketing.models import TicketUpdate
 from stompy_ticketing.service import TicketService
 from tests.test_concurrency_1579 import _row, _sqls
+from tests.tool_response import parse_tool_response as _parse
 
 STORED = "original body: the whole scope of the ticket"
 
@@ -44,11 +43,6 @@ def _wrote(cur):
     return any("UPDATE" in q for q in _sqls(cur))
 
 
-def _parse(text):
-    try:
-        return toon_decode(text)
-    except Exception:
-        return json.loads(text)
 
 
 # --------------------------------------------------------------------------- #
@@ -172,13 +166,13 @@ class TestTheMcpDoor:
         data = _parse(asyncio.run(
             _ticket_tool(conn)(action="update", ticket_id=7, description="a note", confirm=True)
         ))
-        assert data.get("status") == "updated", data
+        assert data.get("action") == "updated", data
         assert _wrote(cur)
 
     def test_mcp_update_title_only_is_unaffected_2394(self):
         conn, cur = _conn()
         data = _parse(asyncio.run(_ticket_tool(conn)(action="update", ticket_id=7, title="renamed")))
-        assert data.get("status") == "updated", data
+        assert data.get("action") == "updated", data
 
     def test_the_tool_description_states_replace_and_append_2394(self):
         doc = _ticket_tool(MagicMock()).__doc__

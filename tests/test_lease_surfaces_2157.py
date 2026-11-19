@@ -59,7 +59,7 @@ async def test_mcp_lease_is_write_scoped_and_uses_host_actor(monkeypatch):
             agent_label="Claude",
         )
     )
-    assert result["status"] == "empty"
+    assert result["action"] == "empty"
     assert access == [("project", True)]
     assert run.call_args.kwargs["actor"] == "51"
     assert run.call_args.kwargs["agent_label"] == "Claude"

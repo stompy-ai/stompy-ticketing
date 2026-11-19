@@ -180,6 +180,7 @@ class TestServiceUsesIdentifier:
 
         _assert_uses_identifier(cur, SAFE_SCHEMA)
 
+    @pytest.mark.usefixtures("known_ticket_card_columns")
     def test_list_tickets_uses_identifier(self):
         rows = [_make_ticket_row()]
         conn, cur = _mock_conn_and_cursor(rows=rows)

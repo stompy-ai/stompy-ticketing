@@ -15,14 +15,13 @@ Two refusals keep their old client-class answer, because their text is AUTHORED
 access denials (STOMPY-2892) and a ValueError the plugin raised itself.
 """
 
-import json
 import logging
 import uuid
 
 import psycopg2
 import psycopg2.errors
 
-from stompy_ticketing.errors import recoverable_error
+from stompy_ticketing.errors import mcp_error, recoverable_error
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +44,7 @@ def caught_error_answer(exc: BaseException, tool: str, *, code: str, failed: str
     """
     name = type(exc).__name__
     if name in HOST_REFUSAL_TYPES or (isinstance(exc, ValueError) and not isinstance(exc, psycopg2.Error)):
-        return json.dumps({"error": f"{prefix}: {str(exc)[:200]}", "error_type": name})
+        return mcp_error("INVALID_ARGUMENT", f"{prefix}: {str(exc)[:200]}", {"error_type": name})
 
     if is_statement_cancel(exc):
         logger.warning(

@@ -14,6 +14,7 @@ from stompy_ticketing.schema import get_tickets_table_sql
 from stompy_ticketing.service import TicketService
 from stompy_ticketing.ticket_listing import glob_regex
 from tests.test_cluster_c_fixes import _register, _run
+from tests.tool_response import parse_tool_response
 
 SCHEMA = "grep_462"
 TITLES = [
@@ -181,7 +182,6 @@ def test_native_bracket_classes_match_oracle(native_db):
 
 
 def test_native_mcp_invalid_pattern_is_a_client_refusal(native_db):
-    import json
 
     tools, _ = _register(db_factory=lambda _: native_db)
     original = TicketService().list_tickets
@@ -194,6 +194,6 @@ def test_native_mcp_invalid_pattern_is_a_client_refusal(native_db):
             ),
         ),
     ):
-        result = json.loads(_run(tools["ticket"](action="list", grep="a*")))
+        result = parse_tool_response(_run(tools["ticket"](action="list", grep="a*")))
     assert result["error_type"] == "ValueError"
-    assert result["error"] == "Title glob could not be matched; simplify the pattern"
+    assert result["message"] == "Title glob could not be matched; simplify the pattern"

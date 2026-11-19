@@ -14,8 +14,9 @@ tool's structured shape. An agent cannot write one handler for two shapes,
 so it wrote none.
 """
 
-import json
 from typing import Any, Dict, List, Optional
+
+from .response_encoding import toon_encode as encode_answer
 
 
 def mcp_error(code: str, message: str, details: Optional[Dict[str, Any]] = None) -> str:
@@ -25,7 +26,7 @@ def mcp_error(code: str, message: str, details: Optional[Dict[str, Any]] = None)
     payload: Dict[str, Any] = {"success": False, "error": code, "message": message}
     if details:
         payload.update(details)
-    return json.dumps(payload, indent=2)
+    return encode_answer(payload)
 
 
 def recoverable_error(
@@ -44,7 +45,7 @@ def recoverable_error(
     }
     if details:
         payload.update(details)
-    return json.dumps(payload, indent=2)
+    return encode_answer(payload)
 
 
 def not_found_error(entity: str, ref: Any) -> str:
@@ -53,6 +54,17 @@ def not_found_error(entity: str, ref: Any) -> str:
     return recoverable_error(
         "NOT_FOUND",
         f"{entity} {ref!r} not found",
-        ["Check the ticket ID or ref is correct", "ticket_search() to find the right ticket"],
+        [
+            "Check the ticket ID or ref is correct",
+            "ticket_search() to find the right ticket",
+        ],
         {"ref": str(ref)},
     )
+
+
+class InvalidTransitionError(Exception):
+    """A workflow refusal with machine-readable alternatives."""
+
+    def __init__(self, message, *, allowed_next=None):
+        super().__init__(message)
+        self.allowed_next = list(allowed_next or [])

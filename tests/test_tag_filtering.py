@@ -115,6 +115,7 @@ class TestTicketListFiltersTags:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.usefixtures("known_ticket_card_columns")
 class TestListTicketsTagFiltering:
     """Test that list_tickets generates correct SQL for tag filtering."""
 
