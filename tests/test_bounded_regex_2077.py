@@ -13,7 +13,10 @@ import pytest
 from stompy_ticketing.mcp_tools import register_ticketing_tools
 from stompy_ticketing.models import SearchResult, TicketResponse
 from stompy_ticketing.safe_regex import compile_search_regex
-from tests.tool_response import parse_tool_response
+if __name__ == "__main__":
+    from tool_response import parse_tool_response
+else:
+    from tests.tool_response import parse_tool_response
 
 FIXED_TIME = 1700000000.0
 
