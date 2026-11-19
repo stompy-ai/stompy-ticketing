@@ -4,6 +4,7 @@ import re
 from typing import Any, List
 
 from psycopg2 import sql
+from psycopg2.errors import InvalidRegularExpression, QueryCanceled
 
 from .models import TicketListFilters, TicketListResponse
 from .ticket_projection import list_card_projection, row_to_card
@@ -67,7 +68,40 @@ def glob_regex(pattern: str) -> str:
     return r"(?s)\A" + "".join(parts) + r"\Z"
 
 
+LIST_STATEMENT_TIMEOUT = "5s"
+
+
+def _bound_list(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT set_config('statement_timeout', %s, true)",
+            (LIST_STATEMENT_TIMEOUT,),
+        )
+
+
 def list_tickets(service, conn, schema, filters, fields):
+    from .service import sweep_if_due
+
+    try:
+        _bound_list(conn)
+        sweep_if_due(service, conn, schema)  # can commit/rollback, clearing SET LOCAL
+        _bound_list(conn)
+        return _list_rows(service, conn, schema, filters, fields)
+    except QueryCanceled as exc:
+        conn.rollback()
+        raise ValueError(
+            "Ticket list timed out; narrow the filters and retry."
+        ) from exc
+    except InvalidRegularExpression as exc:
+        if not (filters and filters.grep):
+            raise
+        conn.rollback()
+        raise ValueError(
+            "Title glob could not be matched; simplify the pattern"
+        ) from exc
+
+
+def _list_rows(service, conn, schema, filters, fields):
     if filters is None:
         filters = TicketListFilters()
 

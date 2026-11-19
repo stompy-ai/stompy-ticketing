@@ -25,11 +25,12 @@ from stompy_ticketing.refs import TicketRefError, coerce_ticket_ref, format_disp
 from stompy_ticketing.ticket_projection import get_view, status_change as _status_change
 from stompy_ticketing.ticket_answers import present_answer, present_ticket_fields
 from stompy_ticketing.safe_regex import compile_search_regex
-from stompy_ticketing.response_encoding import toon_encode as _toon_encode
+from stompy_ticketing.response_encoding import _omit_empty, toon_encode as _toon_encode
 
 from psycopg2 import OperationalError as _OperationalError
 
 from stompy_ticketing.models import (
+    MAX_GREP_LENGTH,
     ContextLinkCreate,
     ContextLinkType,
     LinkType,
@@ -141,21 +142,6 @@ def _card_with_size(ticket) -> dict:
     return card
 
 
-def _omit_empty(obj: Any) -> Any:
-    """Drop None values and empty collections, recursively (STOMPY-1908).
-    Eight keys of `null` / `[]` per ticket said nothing; a caller that needs
-    history asks for it. Zero and False are values and stay."""
-    if isinstance(obj, dict):
-        out = {}
-        for k, v in obj.items():
-            v = _omit_empty(v)
-            if v is None or (isinstance(v, (list, dict)) and not v):
-                continue
-            out[k] = v
-        return out
-    if isinstance(obj, list):
-        return [_omit_empty(v) for v in obj]
-    return obj
 
 
 # STOMPY-1432: action classification driving the host's shared-project
@@ -310,7 +296,7 @@ def register_ticketing_tools(
         offset: Annotated[Optional[int], "Skip N tickets for list pagination"] = None,
         include_archived: Annotated[bool, "Include archived tickets in list"] = False,
         project: Annotated[Optional[str], "Project name"] = None,
-        grep: Annotated[Optional[str], "Filter list results by title (fnmatch glob, e.g. 'auth*', '*bug*')"] = None,
+        grep: Annotated[Optional[str], "Filter list titles by fnmatch glob (max 200 characters, e.g. 'auth*')"] = None,
         expected_updated_at: Annotated[
             Optional[float],
             "update only: optimistic guard — pass the updated_at you read; refused with CONFLICT if the ticket changed since (re-read and retry, or use append)",
@@ -360,6 +346,11 @@ def register_ticketing_tools(
         Refusals name the workflow alternatives. To finish a ticket, use close."""
         _prefix_token = None
         try:
+            if action == "list" and grep is not None and len(grep) > MAX_GREP_LENGTH:
+                return mcp_error(
+                    "INVALID_ARGUMENT",
+                    f"grep must be at most {MAX_GREP_LENGTH} characters; shorten the glob.",
+                )
             # Dual-format ref coercion (design 2026-07-27): a prefixed id
             # resolves its own project and OVERRIDES the project param —
             # unless the caller explicitly passed a DIFFERENT project, which
