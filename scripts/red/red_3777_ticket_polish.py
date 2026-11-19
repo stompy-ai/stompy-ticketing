@@ -139,7 +139,7 @@ REVERTS = [
     ),
     (
         "skip_roundtrip_validation",
-        "stompy_ticketing/errors.py",
+        "stompy_ticketing/response_encoding.py",
         "if decode(encoded) == data:",
         "if True:",
         {A + "test_refusal_recovery_steps_survive_codec_roundtrip_failure"},
@@ -148,7 +148,7 @@ REVERTS = [
         "json_refusals_by_default",
         "stompy_ticketing/errors.py",
         "return encode_answer(payload)\n\n\ndef recoverable_error(",
-        "return json.dumps(payload, indent=2)\n\n\ndef recoverable_error(",
+        'return __import__("json").dumps(payload, indent=2)\n\n\ndef recoverable_error(',
         {
             A + "test_missing_title_uses_house_refusal_shape",
             A + "test_close_refusal_names_terminal_choices_instead_of_repeating_close",

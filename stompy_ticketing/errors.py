@@ -14,22 +14,9 @@ tool's structured shape. An agent cannot write one handler for two shapes,
 so it wrote none.
 """
 
-import json
 from typing import Any, Dict, List, Optional
 
-
-def encode_answer(data):
-    """Encode as TOON (Token-Oriented Object Notation), JSON fallback."""
-    try:
-        from toon import decode, encode
-
-        encoded = encode(data)
-        if decode(encoded) == data:
-            return encoded
-    except Exception:
-        pass
-    # Same STOMPY-1768 contract as the host: valid JSON beats lossy TOON.
-    return json.dumps(data, default=str)
+from .response_encoding import toon_encode as encode_answer
 
 
 def mcp_error(code: str, message: str, details: Optional[Dict[str, Any]] = None) -> str:

@@ -18,7 +18,6 @@ from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 from stompy_ticketing import duplicates
 from stompy_ticketing.db_error_answer import caught_error_answer, is_statement_cancel
 from stompy_ticketing.errors import mcp_error, not_found_error, recoverable_error
-from stompy_ticketing.errors import encode_answer as _toon_encode
 from stompy_ticketing.leases import LeaseRefused
 from stompy_ticketing.archival import ArchiveRefused
 from stompy_ticketing.archive_actions import archive_action
