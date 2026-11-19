@@ -1,0 +1,10 @@
+{
+  "extensions": [".py"],
+  "ignore_dirs": [".venv", "venv", "__pycache__", "node_modules", ".git", ".worktrees", ".claude", "build", "dist", ".eggs"],
+  "exclude": [
+    {"glob": "tests/*", "class": "test", "reason": "test tree; size-governed by pytest, not the module ladder"},
+    {"glob": "test_*.py", "class": "test", "reason": "pytest module"},
+    {"glob": "conftest.py", "class": "test", "reason": "pytest fixtures"}
+  ],
+  "clone": {"format": "python", "min_tokens": 70}
+}
