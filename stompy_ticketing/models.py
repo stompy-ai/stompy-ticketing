@@ -112,6 +112,7 @@ class BatchCloseRequest(BaseModel):
 
 
 class TicketListFilters(BaseModel):
+    grep: Optional[str] = None  # fnmatch title glob, applied before paging
     type: Optional[TicketType] = None
     status: Optional[str] = None
     priority: Optional[Priority] = None
