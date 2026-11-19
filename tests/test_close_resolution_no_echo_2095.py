@@ -151,7 +151,7 @@ from tests.test_rest_actor_2380 import CALLER, _ticket, door  # noqa: E402,F401
 def test_mcp_close_says_the_note_was_kept_and_which_status_it_closed_as():
     ticket_fn = _register("close_ticket", return_value=_ticket(status="done"))
     answer = _run(ticket_fn(action="close", ticket_id=1, resolution=NOTE, project="test_project"))
-    assert "status: closed" in answer
+    assert "action: closed" in answer
     assert "note_kept: true" in answer and "closed_as: done" in answer
     assert NOTE not in answer, "the note is on the ticket, not echoed back"
 
@@ -160,7 +160,7 @@ def test_mcp_close_with_a_terminal_status_says_nothing_about_a_note():
     ticket_fn = _register("close_ticket", return_value=_ticket(status="cancelled"))
     answer = _run(ticket_fn(action="close", ticket_id=1, resolution="cancelled",
                             project="test_project"))
-    assert "status: closed" in answer and "note_kept" not in answer
+    assert "action: closed" in answer and "note_kept" not in answer
 
 
 def test_rest_batch_close_keeps_the_note_and_never_makes_it_the_actor(door):

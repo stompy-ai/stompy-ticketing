@@ -18,6 +18,7 @@ from unittest.mock import MagicMock, patch
 
 from stompy_ticketing import mcp_tools
 from stompy_ticketing.models import TicketResponse
+from tests.tool_response import parse_tool_response
 
 BODY = "x" * 50_000
 
@@ -56,14 +57,14 @@ def _long_ticket():
 def _call(tool, **kw):
     # The door encodes TOON; JSON here reads the same payload shape.
     with patch.object(mcp_tools, "_toon_encode", json.dumps):
-        return json.loads(asyncio.run(tool(project="proj", **kw)))
+        return parse_tool_response(asyncio.run(tool(project="proj", **kw)))
 
 
 def test_append_answers_a_receipt_without_the_body():
     tool, service = _register()
     service.append_description.return_value = _long_ticket()
     out = _call(tool, action="append", ticket_id=7, description="a note")
-    assert out["status"] == "appended"
+    assert out["action"] == "appended"
     ticket = out["ticket"]
     assert ticket["id"] == 7
     assert ticket.get("description") is None

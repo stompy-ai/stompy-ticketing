@@ -22,7 +22,6 @@ the board row), but it is the public REST record, so its shape stays as it was.
 """
 
 import asyncio
-import json
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
@@ -38,6 +37,7 @@ from stompy_ticketing.models import (
     TicketLinkResponse,
     TicketResponse,
 )
+from tests.tool_response import parse_tool_response as _parse
 
 FIXED_TIME = 1700000000.0
 SCHEMA = "test_project"
@@ -126,13 +126,6 @@ def mcp_get():
     return text, _parse(text)
 
 
-def _parse(text):
-    try:
-        from toon import decode
-
-        return decode(text)
-    except Exception:
-        return json.loads(text)
 
 
 def test_every_appended_section_is_shipped_once():

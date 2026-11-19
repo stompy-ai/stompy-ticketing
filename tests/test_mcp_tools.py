@@ -9,19 +9,13 @@ import json
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
-from toon import decode as toon_decode
 
 
-def _parse(text):
-    """Parse TOON or JSON response."""
-    try:
-        return toon_decode(text)
-    except Exception:
-        return json.loads(text)
 
 import pytest
 
 from stompy_ticketing.mcp_tools import register_ticketing_tools
+from tests.tool_response import parse_tool_response as _parse
 
 FIXED_TIME = 1700000000.0
 SCHEMA = "test_project"
@@ -374,7 +368,7 @@ class TestUpdateActionRejectsStatus:
         data = _parse(raw)
 
         assert "error" in data
-        assert "move" in data["error"].lower()
+        assert "move" in data["message"].lower()
         # Should NOT have called update_ticket
         mock_svc.update_ticket.assert_not_called()
 

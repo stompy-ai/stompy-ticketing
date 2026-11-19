@@ -3,7 +3,6 @@
 One core (TicketService.add_link), three doors: service, MCP, REST.
 """
 
-import json
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
@@ -16,6 +15,7 @@ from stompy_ticketing.models import LinkType, TicketLinkCreate
 from stompy_ticketing.service import LinkRefusedError, TicketService
 from tests.test_cluster_c_fixes import _register, _run
 from tests.test_service import _sql_to_str
+from tests.tool_response import parse_tool_response
 
 NEW_ROW = {
     "id": 5, "source_id": 2, "target_id": 1, "link_type": "blocks", "created_at": 1.0,
@@ -92,7 +92,7 @@ def test_link_refused_is_value_error_2871():
 )
 def test_mcp_refusal_is_a_client_refusal_with_code_2871(args, code):
     tools, _ = _register(db_factory=lambda n: _conn(reverse_exists=True))
-    out = json.loads(_run(tools["ticket_link"](action="add", **args)))
+    out = parse_tool_response(_run(tools["ticket_link"](action="add", **args)))
     # host classifies error_type in {InvalidTransition, ValueError, ALREADY_LINKED} as client
     assert out["error_type"] == "ValueError"
     assert out["code"] == code

@@ -1,7 +1,6 @@
 """STOMPY-2880: duplicate link -> ALREADY_LINKED on every door (REST 409, not 500);
 reverse of a symmetric (related) link is the same link; directional reverse unchanged."""
 
-import json
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
@@ -15,6 +14,7 @@ from stompy_ticketing.models import LinkType, TicketLinkCreate
 from stompy_ticketing.service import LinkAlreadyExistsError, TicketService
 from tests.test_cluster_c_fixes import _register, _run
 from tests.test_service import _sql_to_str
+from tests.tool_response import parse_tool_response
 
 NEW_ROW = {
     "id": 5, "source_id": 2, "target_id": 4, "link_type": "related", "created_at": 1.0,
@@ -85,7 +85,7 @@ def test_service_same_direction_duplicate_carries_existing_id_2880():
 
 def test_mcp_reverse_related_is_already_linked_client_class_2880():
     tools, _ = _register(db_factory=lambda n: _conn(reverse_id=9))
-    out = json.loads(_run(tools["ticket_link"](action="add", ticket_id=2, target_id=4, link_type="related")))
+    out = parse_tool_response(_run(tools["ticket_link"](action="add", ticket_id=2, target_id=4, link_type="related")))
     assert out["error_type"] == "ALREADY_LINKED"
 
 

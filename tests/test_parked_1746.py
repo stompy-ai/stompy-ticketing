@@ -45,6 +45,7 @@ from stompy_ticketing.service import (
     get_terminal_statuses,
     validate_transition,
 )
+from tests.tool_response import parse_tool_response
 
 FIXED_TIME = 1700000000.0
 SCHEMA = "test_project"
@@ -432,8 +433,8 @@ class TestMcpDoor:
             id=5, title="t", type="task", status=PARKED, priority="medium", archived_at=FIXED_TIME
         )
         with patch("stompy_ticketing.mcp_tools._toon_encode", side_effect=json.dumps):
-            parsed = json.loads(_run(ticket(action="archive", ticket_id=5, project=SCHEMA)))
-        assert parsed["status"] == "archived"
+            parsed = parse_tool_response(_run(ticket(action="archive", ticket_id=5, project=SCHEMA)))
+        assert parsed["action"] == "archived"
         assert parsed["ticket"]["id"] == 5
         svc.archive_ticket.assert_called_once()
         svc.archive_stale_tickets.assert_not_called()
@@ -441,7 +442,7 @@ class TestMcpDoor:
     def test_archive_with_ticket_ids_is_refused_loudly(self):
         ticket, svc = _register()
 
-        parsed = json.loads(_run(ticket(action="archive", ticket_ids="5,6", project=SCHEMA)))
+        parsed = parse_tool_response(_run(ticket(action="archive", ticket_ids="5,6", project=SCHEMA)))
 
         assert parsed["error"] == "INVALID_PARAMS"
         svc.archive_stale_tickets.assert_not_called()
@@ -450,7 +451,7 @@ class TestMcpDoor:
         ticket, svc = _register()
         svc.archive_stale_tickets.return_value = 3
 
-        parsed = json.loads(_run(ticket(action="archive", project=SCHEMA)))
+        parsed = parse_tool_response(_run(ticket(action="archive", project=SCHEMA)))
 
         assert parsed["count"] == 3
 
@@ -471,7 +472,7 @@ class TestMcpDoor:
         ticket, svc = _register()
         svc.transition_ticket.side_effect = ParkArgumentError("parking requires a reason")
 
-        parsed = json.loads(_run(ticket(action="move", ticket_id=1, status=PARKED, project=SCHEMA)))
+        parsed = parse_tool_response(_run(ticket(action="move", ticket_id=1, status=PARKED, project=SCHEMA)))
 
         assert parsed["success"] is False
         assert parsed["error"] == "PARK_ARGUMENT"

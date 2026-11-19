@@ -8,6 +8,7 @@ import pytest
 from stompy_ticketing.models import TicketResponse
 from tests.test_parked_1746 import SCHEMA, _register, _run
 from tests.test_service import FIXED_TIME
+from tests.tool_response import parse_tool_response
 
 
 @pytest.fixture(autouse=True)
@@ -26,8 +27,8 @@ def test_named_archive_targets_that_ticket_without_sweeping():
         priority="medium",
         archived_at=FIXED_TIME,
     )
-    result = json.loads(_run(ticket(action="archive", ticket_id=5, project=SCHEMA)))
-    assert result.get("status") == "archived", result
+    result = parse_tool_response(_run(ticket(action="archive", ticket_id=5, project=SCHEMA)))
+    assert result.get("action") == "archived", result
     assert result["ticket"]["id"] == 5
     assert result["ticket"]["archived_at"] == FIXED_TIME
     service.archive_ticket.assert_called_once()
@@ -44,8 +45,8 @@ def test_named_unarchive_is_a_restore_not_a_status_move():
         status="done",
         priority="medium",
     )
-    result = json.loads(_run(ticket(action="unarchive", ticket_id=5, project=SCHEMA)))
-    assert result.get("status") == "unarchived", result
+    result = parse_tool_response(_run(ticket(action="unarchive", ticket_id=5, project=SCHEMA)))
+    assert result.get("action") == "unarchived", result
     assert result["ticket"].get("archived_at") is None
     service.unarchive_ticket.assert_called_once()
     service.transition_ticket.assert_not_called()
@@ -55,7 +56,7 @@ def test_named_unarchive_is_a_restore_not_a_status_move():
 def test_no_id_archive_preserves_legacy_sweep_control():
     ticket, service = _register()
     service.archive_stale_tickets.return_value = 3
-    result = json.loads(_run(ticket(action="archive", project=SCHEMA)))
+    result = parse_tool_response(_run(ticket(action="archive", project=SCHEMA)))
     assert result["count"] == 3
     service.archive_stale_tickets.assert_called_once()
     service.archive_ticket.assert_not_called()
@@ -63,7 +64,7 @@ def test_no_id_archive_preserves_legacy_sweep_control():
 
 def test_batch_ids_on_single_archive_are_still_refused_without_sweep():
     ticket, service = _register()
-    result = json.loads(
+    result = parse_tool_response(
         _run(ticket(action="archive", ticket_ids="5,6", project=SCHEMA))
     )
     assert result["error"] == "INVALID_PARAMS"

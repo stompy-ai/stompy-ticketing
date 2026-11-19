@@ -436,6 +436,7 @@ class TestCloseTicket:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.usefixtures("known_ticket_card_columns")
 class TestListTickets:
     def setup_method(self):
         self.service = TicketService()
@@ -1178,6 +1179,7 @@ class TestTsquerySanitization:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.usefixtures("known_ticket_card_columns")
 class TestListTicketsSearchFilter:
     """Tests for the search filter in list_tickets (uses same OR logic)."""
 
@@ -1454,6 +1456,7 @@ class TestArchiveStaleTickets:
 # --------------------------------------------------------------------------- #
 
 
+@pytest.mark.usefixtures("known_ticket_card_columns")
 class TestListTicketsArchiveFilter:
     def setup_method(self):
         self.service = TicketService()

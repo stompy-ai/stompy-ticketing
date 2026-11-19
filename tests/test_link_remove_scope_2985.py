@@ -1,6 +1,5 @@
 """STOMPY-2985: removing a link is scoped to the ticket it is removed through."""
 
-import json
 from contextlib import contextmanager
 from unittest.mock import MagicMock
 
@@ -13,6 +12,7 @@ from stompy_ticketing.api_routes import configure_routes, router
 from stompy_ticketing.service import TicketService
 from tests.test_cluster_c_fixes import _register, _run
 from tests.test_service import _sql_to_str
+from tests.tool_response import parse_tool_response
 
 
 def _conn(deleted):
@@ -79,8 +79,8 @@ def test_mcp_remove_passes_ticket_id_2985():
     conn = MagicMock()
     conn.cursor.return_value.fetchone.return_value = None
     tools, _ = _register(db_factory=lambda n: conn)
-    out = json.loads(_run(tools["ticket_link"](action="remove", ticket_id=5, link_id=3)))
-    assert out == {"error": "Link 3 not found"}
+    out = parse_tool_response(_run(tools["ticket_link"](action="remove", ticket_id=5, link_id=3)))
+    assert out == {"success": False, "error": "LINK_NOT_FOUND", "message": "Link 3 not found"}
     for query, params in (c[0] for c in conn.cursor.return_value.execute.call_args_list):
         if "DELETE" in _sql_to_str(query):
             assert 5 in params
