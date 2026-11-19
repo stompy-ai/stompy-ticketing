@@ -10,10 +10,15 @@ from httpx import ASGITransport, AsyncClient
 from toon import decode
 
 from stompy_ticketing import api_routes, mcp_tools
-from stompy_ticketing.models import (BoardColumn, BoardView,
-                                     ContextLinkResponse, SearchResult,
-                                     TicketCreate, TicketListResponse,
-                                     TicketResponse)
+from stompy_ticketing.models import (
+    BoardColumn,
+    BoardView,
+    ContextLinkResponse,
+    SearchResult,
+    TicketCreate,
+    TicketListResponse,
+    TicketResponse,
+)
 
 FIXED_TIME = 1700000000.0
 STEPS = ["First: do the thing", "Then: check the row"]
