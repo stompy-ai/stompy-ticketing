@@ -54,13 +54,13 @@ _PRIORITY_RANK = sql.SQL(
 _table_columns: Dict[Tuple[Any, str], Tuple[FrozenSet[str], Optional[float]]] = {}
 
 
-def _ticket_columns(conn, cur, schema: str) -> Optional[FrozenSet[str]]:
+def _ticket_columns(conn, cur, schema: str, *, fresh: bool = False) -> Optional[FrozenSet[str]]:
     """The tickets table's actual columns, or None when they cannot be read
     (then every column is named, as before)."""
     database = _database(conn)
     key, now = (database, schema), time.monotonic()
     hit = _table_columns.get(key) if database is not None else None
-    if hit and (hit[1] is None or now < hit[1]):
+    if not fresh and hit and (hit[1] is None or now < hit[1]):
         return hit[0]
     cur.execute(
         sql.SQL(

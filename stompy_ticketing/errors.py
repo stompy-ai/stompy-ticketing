@@ -18,6 +18,20 @@ import json
 from typing import Any, Dict, List, Optional
 
 
+def encode_answer(data):
+    """Encode as TOON (Token-Oriented Object Notation), JSON fallback."""
+    try:
+        from toon import decode, encode
+
+        encoded = encode(data)
+        if decode(encoded) == data:
+            return encoded
+    except Exception:
+        pass
+    # Same STOMPY-1768 contract as the host: valid JSON beats lossy TOON.
+    return json.dumps(data, default=str)
+
+
 def mcp_error(code: str, message: str, details: Optional[Dict[str, Any]] = None) -> str:
     """`{"success": false, "error": code, "message": ..., **details}` —
     for an error with no useful "try this next" guidance (a caller-input
@@ -25,7 +39,7 @@ def mcp_error(code: str, message: str, details: Optional[Dict[str, Any]] = None)
     payload: Dict[str, Any] = {"success": False, "error": code, "message": message}
     if details:
         payload.update(details)
-    return json.dumps(payload, indent=2)
+    return encode_answer(payload)
 
 
 def recoverable_error(
@@ -44,7 +58,7 @@ def recoverable_error(
     }
     if details:
         payload.update(details)
-    return json.dumps(payload, indent=2)
+    return encode_answer(payload)
 
 
 def not_found_error(entity: str, ref: Any) -> str:
@@ -53,6 +67,17 @@ def not_found_error(entity: str, ref: Any) -> str:
     return recoverable_error(
         "NOT_FOUND",
         f"{entity} {ref!r} not found",
-        ["Check the ticket ID or ref is correct", "ticket_search() to find the right ticket"],
+        [
+            "Check the ticket ID or ref is correct",
+            "ticket_search() to find the right ticket",
+        ],
         {"ref": str(ref)},
     )
+
+
+class InvalidTransitionError(Exception):
+    """A workflow refusal with machine-readable alternatives."""
+
+    def __init__(self, message, *, allowed_next=None):
+        super().__init__(message)
+        self.allowed_next = list(allowed_next or [])

@@ -16,6 +16,7 @@ from psycopg2 import IntegrityError, sql
 from stompy_ticketing.archival import ArchiveMixin
 from stompy_ticketing.board_view import BoardMixin, context_links_present
 from stompy_ticketing.duplicates import content_hash as duplicate_content_hash
+from stompy_ticketing.errors import InvalidTransitionError
 from stompy_ticketing.stale_archive import run_if_due, sweep_if_due
 
 from stompy_ticketing.models import (
@@ -72,12 +73,6 @@ def _closing_note_text(note: str, final_status: str) -> str:
     """The note as it lands on the ticket: dated here, attributed by history."""
     day = time.strftime("%Y-%m-%d", time.gmtime())
     return f"## Closed as {final_status} ({day})\n{note.strip()}"
-
-
-class InvalidTransitionError(Exception):
-    """Raised when a ticket transition violates the state machine."""
-
-    pass
 
 
 _SYMMETRIC_LINK_TYPES = frozenset({LinkType.related})
@@ -324,7 +319,7 @@ def validate_transition(
         if raise_on_invalid:
             raise InvalidTransitionError(
                 f"'{current_status}' is not a valid status for type '{ticket_type}'. "
-                f"Valid statuses: {list(transitions.keys())}"
+                f"Valid statuses: {list(transitions.keys())}", allowed_next=list(transitions.keys())
             )
         return False
 
@@ -344,7 +339,7 @@ def validate_transition(
                 hint = f" '{target_status}' is not reachable from '{current_status}'."
             raise InvalidTransitionError(
                 f"Cannot transition {ticket_type} from '{current_status}' to "
-                f"'{target_status}'. Allowed next: {allowed}.{hint}"
+                f"'{target_status}'. Allowed next: {allowed}.{hint}", allowed_next=allowed
             )
         return False
 
@@ -881,7 +876,9 @@ class TicketService(ArchiveMixin, BoardMixin):
         if resolution in terminals:
             return resolution, None
         if resolution.strip().lower() in _all_status_words():
-            raise InvalidTransitionError(_resolution_refusal(ticket_type, terminals))
+            raise InvalidTransitionError(
+                _resolution_refusal(ticket_type, terminals), allowed_next=terminals
+            )
         if len(_closing_note_text(resolution, "x" * 16)) > self.MAX_APPEND_CHARS:
             raise ValueError(
                 f"closing note exceeds {self.MAX_APPEND_CHARS} chars; nothing was closed"
