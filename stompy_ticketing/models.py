@@ -111,8 +111,11 @@ class BatchCloseRequest(BaseModel):
     note: Optional[str] = None
 
 
+MAX_GREP_LENGTH = 200
+
+
 class TicketListFilters(BaseModel):
-    grep: Optional[str] = None  # fnmatch title glob, applied before paging
+    grep: Optional[str] = Field(default=None, max_length=MAX_GREP_LENGTH)  # fnmatch title glob, applied before paging
     type: Optional[TicketType] = None
     status: Optional[str] = None
     priority: Optional[Priority] = None

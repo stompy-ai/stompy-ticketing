@@ -96,9 +96,9 @@ REVERTS = [
     ),
     (
         "do_not_classify_pattern_rejection",
-        "stompy_ticketing/service.py",
-        "        except InvalidRegularExpression as exc:\n",
-        "        except InvalidRegularExpression as exc:\n            raise\n",
+        "stompy_ticketing/ticket_listing.py",
+        "    except InvalidRegularExpression as exc:\n",
+        "    except InvalidRegularExpression as exc:\n        raise\n",
         {
             UNIT + "test_postgres_pattern_rejection_is_a_client_refusal",
             NATIVE + "test_native_mcp_invalid_pattern_is_a_client_refusal",
