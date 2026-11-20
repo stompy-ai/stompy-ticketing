@@ -3,22 +3,25 @@
 Prod, 2026-11-20 20:33Z: ticket(action="create", tags=["ptt", "raha", ...]) was refused
 twice by argument validation before the tool ran ("tags / Input should be a valid
 string"). Reads return tags as a list, so agents send one; ticket_ids on the batch
-actions has the same shape. These tests register the tools on a real FastMCP, so the
-refusal layer itself is exercised (the suite's usual mock captures the raw function
-and skips it).
+actions has the same shape. FastMCP validates arguments
+with pydantic against the tool's signature; these tests wrap the registered tool in
+pydantic.validate_call, which applies that same signature validation (the plugin's
+clean CI venv has no `mcp` package, so FastMCP itself cannot be imported here).
 """
 
 import asyncio
 from contextlib import contextmanager
 from unittest.mock import MagicMock, patch
 
-from mcp.server.fastmcp import FastMCP
+from pydantic import validate_call
 
 from stompy_ticketing.mcp_tools import register_ticketing_tools
 
 
 def _call(svc, **args):
-    mcp = FastMCP("t3814")
+    registered = {}
+    mcp = MagicMock()
+    mcp.tool = lambda *a, **k: (lambda fn: registered.setdefault(fn.__name__, fn))
 
     @contextmanager
     def db_ctx(project=None, require_write=True):
@@ -31,10 +34,10 @@ def _call(svc, **args):
             check_project_func=MagicMock(return_value=None),
             get_project_func=MagicMock(return_value="test-project"),
         )
-        tool = mcp._tool_manager.get_tool("ticket")
+        ticket = validate_call(registered["ticket"])  # the signature validation FastMCP runs
         try:
-            return str(asyncio.run(tool.run({"project": "test-project", **args})))
-        except Exception as exc:  # FastMCP raises on argument validation failure
+            return str(asyncio.run(ticket(project="test-project", **args)))
+        except Exception as exc:  # pydantic ValidationError = the refusal agents saw
             return f"REFUSED: {exc}"
 
 
