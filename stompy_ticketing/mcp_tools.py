@@ -15,6 +15,7 @@ import contextvars
 import time as _time
 from typing import Annotated, Any, Callable, List, Literal, Optional, Union
 
+from stompy_ticketing.arg_types import IdsArg, TagsArg  # STOMPY-3814
 from stompy_ticketing import duplicates
 from stompy_ticketing.db_error_answer import caught_error_answer, is_statement_cancel
 from stompy_ticketing.errors import mcp_error, not_found_error, recoverable_error
@@ -273,15 +274,15 @@ def register_ticketing_tools(
         ] = None,
         status: Annotated[Optional[str], "Target status for move/batch_move, or filter for list"] = None,
         assignee: Annotated[Optional[str], "Assignee name"] = None,
-        tags: Annotated[Optional[str], "Comma-separated tags"] = None,
+        tags: Annotated[Optional[TagsArg], "Tags: a list or a comma-separated string"] = None,
         ticket_id: Annotated[
             Optional[Union[int, str]],
             "Ticket ID (get/update/move/close/archive/unarchive): numeric (1311), prefixed "
             "(STOMPY-1311), or the full ticket URL a human was sent",
         ] = None,
         ticket_ids: Annotated[
-            Optional[str],
-            "Comma-separated IDs (batch_move/batch_close/batch_archive); numeric or prefixed, all same project",
+            Optional[IdsArg],
+            "IDs as a list or comma-separated string (batch_move/batch_close/batch_archive); numeric or prefixed, all same project",
         ] = None,
         confirm: Annotated[bool, "batch_*: execute (default: preview only); update: allow description to REPLACE a non-empty one"] = False,
         resolution: Annotated[
