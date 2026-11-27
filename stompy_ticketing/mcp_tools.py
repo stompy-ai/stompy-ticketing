@@ -256,6 +256,18 @@ def register_ticketing_tools(
         """Resolve project name to PostgreSQL schema name."""
         return resolve_schema_func(project_name) if resolve_schema_func else project_name
 
+    def _same_project(ref_project, project) -> bool:
+        """A prefix resolves to the project's SCHEMA; after a rename the caller's
+        current name differs from it. Same schema = same project (STOMPY-3912)."""
+        if ref_project == project:
+            return True
+        if project is None or ref_project is None or resolve_schema_func is None:
+            return False
+        try:
+            return resolve_schema_func(project) == ref_project
+        except Exception:  # an unresolvable name is a mismatch, refused below
+            return False
+
     @mcp_instance.tool()
     async def ticket(
         action: Annotated[
@@ -358,7 +370,7 @@ def register_ticketing_tools(
             # is a conflict we refuse rather than guess.
             try:
                 _ref_project, ticket_id = coerce_ticket_ref(ticket_id, project, resolve_prefix_func)
-                if _ref_project != project:
+                if not _same_project(_ref_project, project):
                     if project is not None:
                         return mcp_error('PROJECT_MISMATCH', f"Ticket ref belongs to project '{_ref_project}' but project='{project}' was passed. Drop the project param or use a numeric id.")
                     project = _ref_project
@@ -369,7 +381,7 @@ def register_ticketing_tools(
                     if len(_projects) > 1:
                         return mcp_error('PROJECT_MISMATCH', f'Batch refs span multiple projects ({sorted(_projects)}) — batches are per-project.')
                     _only = _projects.pop()
-                    if _only != project:
+                    if not _same_project(_only, project):
                         if project is not None:
                             return mcp_error('PROJECT_MISMATCH', f"Batch refs belong to project '{_only}' but project='{project}' was passed.")
                         project = _only
@@ -688,11 +700,11 @@ def register_ticketing_tools(
         try:
             _src_project, ticket_id = coerce_ticket_ref(ticket_id, project, resolve_prefix_func)
             _tgt_project, target_id = coerce_ticket_ref(target_id, project, resolve_prefix_func)
-            if _src_project != project:
+            if not _same_project(_src_project, project):
                 if project is not None:
                     return mcp_error('PROJECT_MISMATCH', f"Source ref belongs to project '{_src_project}' but project='{project}' was passed.")
                 project = _src_project
-            if target_id is not None and _tgt_project != project:
+            if target_id is not None and not _same_project(_tgt_project, project):
                 # minimal: cross-project links need a target_ref column on
                 # ticket_links (FKs are per-schema). Explicit refusal, not a
                 # silent mangle — revisit with the follow-up ticket.
